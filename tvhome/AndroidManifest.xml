@@ -52,5 +52,17 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Own screensaver with the user's photos; no dependency on Google's disabled apps. -->
+        <service
+            android:name=".PhotoDream"
+            android:exported="true"
+            android:label="Fotos (Início)"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

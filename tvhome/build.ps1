@@ -46,4 +46,8 @@ if (-not (Test-Path $ks)) {
 Run "$bt\apksigner.bat" sign --ks $ks --ks-pass "file:$pw" --out "$root\tvhome.apk" "$out\aligned.apk"
 Write-Host ("Built tvhome.apk ({0:N0} KB)" -f ((Get-Item "$root\tvhome.apk").Length / 1KB))
 
-if ($Install) { Run $adb -s $Tv install -r "$root\tvhome.apk" }
+if ($Install) {
+    Run $adb -s $Tv install -r "$root\tvhome.apk"
+    # Reinstalling kills the launcher, which would leave whatever app was underneath on screen.
+    Run $adb -s $Tv shell am start -a android.intent.action.MAIN -c android.intent.category.HOME
+}

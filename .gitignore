@@ -12,3 +12,6 @@ tvhome/build/
 
 # Local screenshots from testing (curated ones live in docs/)
 capturas/
+
+# Personal photos for the screensaver
+fotos/
