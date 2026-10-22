@@ -45,6 +45,38 @@ public final class PhotoDream extends DreamService {
     private volatile boolean running;
     private float density;
 
+    // Hand-off from HomeActivity's transition (same process): the photo already on screen there,
+    // so the dream opens on it instead of on black.
+    private static Bitmap handoff;
+    private static File handoffFile;
+    private static long handoffAt;
+
+    static synchronized void setHandoff(Bitmap b, File f) {
+        handoff = b;
+        handoffFile = f;
+        handoffAt = System.currentTimeMillis();
+    }
+
+    private static synchronized Bitmap takeHandoff(File[] file) {
+        Bitmap b = System.currentTimeMillis() - handoffAt < 60_000 ? handoff : null;
+        file[0] = handoffFile;
+        handoff = null;
+        handoffFile = null;
+        return b;
+    }
+
+    static File pickPhoto(android.content.Context c) {
+        File[] files = listPhotos(c);
+        return files == null || files.length == 0 ? null : files[new Random().nextInt(files.length)];
+    }
+
+    private static File[] listPhotos(android.content.Context c) {
+        File dir = c.getExternalFilesDir("fotos");
+        return dir == null ? null : dir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).matches(".*\\.(jpe?g|png|webp)"));
+    }
+
+    private boolean openedOnHandoff;
+    private File handoffShown;
     private final Runnable advance = this::loadNext;
     private final Runnable minute = new Runnable() {
         @Override public void run() {
@@ -88,20 +120,37 @@ public final class PhotoDream extends DreamService {
         root.addView(when, wp);
 
         setContentView(root);
+
+        // Open on the transition's photo so the very first frame matches what was on screen.
+        File[] f = new File[1];
+        Bitmap b = takeHandoff(f);
+        openedOnHandoff = b != null;
+        if (openedOnHandoff) {
+            front.setImageBitmap(b);
+            handoffShown = f[0];
+        }
+        updateClock();
     }
 
     @Override public void onDreamingStarted() {
         super.onDreamingStarted();
         running = true;
         photos.clear();
-        File dir = getExternalFilesDir("fotos");
-        File[] files = dir == null ? null : dir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).matches(".*\\.(jpe?g|png|webp)"));
+        File[] files = listPhotos(this);
         if (files != null) Collections.addAll(photos, files);
         Collections.shuffle(photos, random);
         next = 0;
         main.post(minute);
         if (photos.isEmpty()) {
             date.setText("Sem fotos: rode tvhome\\fotos-sync.ps1 no PC");
+        } else if (openedOnHandoff) {
+            // Already showing; continue its slow zoom from where the transition left it (1.0).
+            photos.remove(handoffShown);
+            photos.add(0, handoffShown);
+            next = 1;
+            front.animate().scaleX(ZOOM).scaleY(ZOOM).translationX(dp(24) * (random.nextBoolean() ? 1 : -1))
+                    .setDuration(SHOW_MS + FADE_MS * 2).setInterpolator(new LinearInterpolator()).start();
+            main.postDelayed(advance, SHOW_MS);
         } else {
             loadNext();
         }
@@ -126,7 +175,7 @@ public final class PhotoDream extends DreamService {
         if (!running || photos.isEmpty()) return;
         File f = photos.get(next++ % photos.size());
         new Thread(() -> {
-            Bitmap b = decode(f);
+            Bitmap b = decode(this, f);
             main.post(() -> {
                 if (!running) return;
                 if (b == null) {
@@ -139,8 +188,8 @@ public final class PhotoDream extends DreamService {
         }, "dream-decode").start();
     }
 
-    private Bitmap decode(File f) {
-        DisplayMetrics m = getResources().getDisplayMetrics();
+    static Bitmap decode(android.content.Context c, File f) {
+        DisplayMetrics m = c.getResources().getDisplayMetrics();
         BitmapFactory.Options o = new BitmapFactory.Options();
         o.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(f.getPath(), o);
@@ -187,7 +236,7 @@ public final class PhotoDream extends DreamService {
     private void updateClock() {
         long now = System.currentTimeMillis();
         clock.setText(DateFormat.format(DateFormat.is24HourFormat(this) ? "HH:mm" : "h:mm", now));
-        if (photos.isEmpty()) return;
+        if (running && photos.isEmpty()) return; // keeps the "no photos" hint
         String d = DateFormat.format(DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMMM"), now).toString();
         date.setText(d.isEmpty() ? d : Character.toUpperCase(d.charAt(0)) + d.substring(1));
     }

@@ -247,22 +247,48 @@ public final class HomeActivity extends Activity {
         root.addView(hint, hp);
 
         // Ambient hand-off: a plain black layer (cheap to fade) plus a centred clock, both on top.
+        // The layers end exactly as PhotoDream starts (same photo, same corner clock), so the
+        // screensaver takes over with no visible cut.
         ambientShade = new View(this);
         ambientShade.setBackgroundColor(Color.BLACK);
-        ambientShade.setVisibility(View.GONE);
         root.addView(ambientShade, fill());
-        ambientContent = new LinearLayout(this);
-        ambientContent.setOrientation(LinearLayout.VERTICAL);
-        ambientContent.setGravity(Gravity.CENTER_HORIZONTAL);
-        ambientClock = text(76, false);
-        ambientClock.setTypeface(Typeface.create("sans-serif-light", Typeface.NORMAL));
-        TextView ambientCaption = text(16, false);
-        ambientCaption.setText("Modo ambiente");
-        ambientCaption.setAlpha(0.7f);
-        ambientContent.addView(ambientClock);
-        ambientContent.addView(ambientCaption);
-        ambientContent.setVisibility(View.GONE);
-        root.addView(ambientContent, wrap(Gravity.CENTER));
+
+        ambientPhoto = new ImageView(this);
+        ambientPhoto.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        root.addView(ambientPhoto, fill());
+        ambientPhotoShade = new View(this);
+        ambientPhotoShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] {0x00000000, 0x8C000000}));
+        root.addView(ambientPhotoShade, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(280), Gravity.BOTTOM));
+
+        ambientIntro = new LinearLayout(this);
+        ambientIntro.setOrientation(LinearLayout.VERTICAL);
+        ambientClock = dreamText(76, "sans-serif-light");
+        TextView caption = dreamText(16, "sans-serif");
+        caption.setText("Modo ambiente");
+        caption.setAlpha(0.75f);
+        ambientProgress = new View(this);
+        ambientProgress.setBackgroundColor(0x99FFFFFF);
+        ambientIntro.addView(ambientClock, centered(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 0));
+        ambientIntro.addView(caption, centered(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 0));
+        ambientIntro.addView(ambientProgress, centered(dp(140), dp(2), dp(16)));
+        root.addView(ambientIntro, wrap(Gravity.CENTER));
+
+        // Same views, sizes and margins as PhotoDream's clock block.
+        ambientCorner = new LinearLayout(this);
+        ambientCorner.setOrientation(LinearLayout.VERTICAL);
+        ambientCorner.setGravity(Gravity.END);
+        ambientCornerClock = dreamText(56, "sans-serif-light");
+        ambientCornerDate = dreamText(18, "sans-serif");
+        ambientCornerDate.setAlpha(0.85f);
+        ambientCorner.addView(ambientCornerClock);
+        ambientCorner.addView(ambientCornerDate);
+        FrameLayout.LayoutParams acp = wrap(Gravity.BOTTOM | Gravity.END);
+        acp.rightMargin = dp(64);
+        acp.bottomMargin = dp(48);
+        root.addView(ambientCorner, acp);
+
+        for (View v : ambientLayers()) v.setVisibility(View.GONE);
 
         // The opaque wash is the only full-screen layer: no window or root background.
         getWindow().setBackgroundDrawable(null);
@@ -305,20 +331,27 @@ public final class HomeActivity extends Activity {
     // timeout is dropped to the platform minimum; the dream then starts on its own and the
     // saved timeout is put back as soon as it does (or on cancel, timeout, or next launch).
 
-    private static final int AMBIENT_DELAY_MS = 10_000, HANDOFF_MS = 9_400;
+    private static final int AMBIENT_DELAY_MS = 10_000, HANDOFF_MS = 9_600;
     private static final String PREF_TIMEOUT = "savedScreenOffTimeout";
-    private View ambientShade;
-    private LinearLayout ambientContent;
-    private TextView ambientClock;
+    private View ambientShade, ambientPhotoShade, ambientProgress;
+    private ImageView ambientPhoto;
+    private LinearLayout ambientIntro, ambientCorner;
+    private TextView ambientClock, ambientCornerClock, ambientCornerDate;
+    private final List<android.animation.Animator> ambientAnims = new ArrayList<>();
     private boolean ambient;
     private final Runnable ambientGiveUp = this::cancelAmbient;
 
     private final BroadcastReceiver dreaming = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) {
             restoreTimeout();
-            endAmbient(false);
+            // The dream window is on top by now; drop the overlay just after so nothing flashes.
+            main.postDelayed(() -> endAmbient(false), 600);
         }
     };
+
+    private View[] ambientLayers() {
+        return new View[] {ambientShade, ambientPhoto, ambientPhotoShade, ambientIntro, ambientCorner};
+    }
 
     private void startAmbient() {
         if (ambient) return;
@@ -339,22 +372,63 @@ public final class HomeActivity extends Activity {
         main.postDelayed(ambientGiveUp, AMBIENT_DELAY_MS + 15_000);
 
         ambientClock.setText(clock.getText());
-        ambientShade.setVisibility(View.VISIBLE);
-        ambientContent.setVisibility(View.VISIBLE);
-        // Dim quickly to a calm clock, then sink slowly to black just as the dream fades in.
-        ObjectAnimator.ofPropertyValuesHolder(ambientShade, PropertyValuesHolder.ofKeyframe(View.ALPHA,
-                Keyframe.ofFloat(0f, 0f), Keyframe.ofFloat(0.06f, 0.88f), Keyframe.ofFloat(1f, 1f)))
-                .setDuration(HANDOFF_MS).start();
-        ObjectAnimator.ofPropertyValuesHolder(ambientContent,
-                PropertyValuesHolder.ofKeyframe(View.ALPHA, Keyframe.ofFloat(0f, 0f), Keyframe.ofFloat(0.05f, 0f), Keyframe.ofFloat(0.12f, 1f),
-                        Keyframe.ofFloat(0.6f, 1f), Keyframe.ofFloat(1f, 0f)),
-                PropertyValuesHolder.ofFloat(View.SCALE_X, 0.94f, 1.05f),
-                PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.94f, 1.05f))
-                .setDuration(HANDOFF_MS).start();
+        ambientCornerClock.setText(clock.getText());
+        ambientCornerDate.setText(date.getText());
+        ambientPhoto.setImageDrawable(null);
+        for (View v : ambientLayers()) {
+            v.setAlpha(0f);
+            v.setVisibility(View.VISIBLE);
+        }
+        loadHandoffPhoto();
+
+        // 0-1.3s dim to a centred clock; a hairline fills while it breathes; from ~4.3s the
+        // first photo rises behind it; the centred clock gives way to the dream's corner clock.
+        animate(ambientShade, alpha(0, 0, .10f, .9f, .5f, 1));
+        animate(ambientIntro, alpha(0, 0, .04f, 0, .14f, 1, .62f, 1, .74f, 0),
+                scale(View.SCALE_X), scale(View.SCALE_Y));
+        ambientProgress.setScaleX(0f);
+        animate(ambientProgress, PropertyValuesHolder.ofKeyframe(View.SCALE_X,
+                Keyframe.ofFloat(0f, 0f), Keyframe.ofFloat(.08f, 0f), Keyframe.ofFloat(.70f, 1f), Keyframe.ofFloat(1f, 1f)));
+        ambientProgress.setAlpha(1f);
+        animate(ambientPhoto, alpha(0, 0, .45f, 0, .72f, 1));
+        animate(ambientPhotoShade, alpha(0, 0, .45f, 0, .72f, 1));
+        animate(ambientCorner, alpha(0, 0, .66f, 0, .84f, 1));
+    }
+
+    private void animate(View v, PropertyValuesHolder... values) {
+        ObjectAnimator a = ObjectAnimator.ofPropertyValuesHolder(v, values).setDuration(HANDOFF_MS);
+        a.start();
+        ambientAnims.add(a);
+    }
+
+    /** Alpha keyframes as (fraction, value) pairs. */
+    private static PropertyValuesHolder alpha(float... pairs) {
+        Keyframe[] k = new Keyframe[pairs.length / 2];
+        for (int i = 0; i < k.length; i++) k[i] = Keyframe.ofFloat(pairs[i * 2], pairs[i * 2 + 1]);
+        return PropertyValuesHolder.ofKeyframe(View.ALPHA, k);
+    }
+
+    private static PropertyValuesHolder scale(android.util.Property<View, Float> axis) {
+        return PropertyValuesHolder.ofKeyframe(axis, Keyframe.ofFloat(0f, .94f), Keyframe.ofFloat(.14f, 1f),
+                Keyframe.ofFloat(.62f, 1.04f), Keyframe.ofFloat(.74f, 1.1f), Keyframe.ofFloat(1f, 1.1f));
+    }
+
+    /** Decodes a random photo now and hands the same bitmap to PhotoDream, which opens on it. */
+    private void loadHandoffPhoto() {
+        new Thread(() -> {
+            java.io.File f = PhotoDream.pickPhoto(this);
+            Bitmap b = f == null ? null : PhotoDream.decode(this, f);
+            main.post(() -> {
+                if (!ambient || b == null) return;
+                ambientPhoto.setImageBitmap(b);
+                PhotoDream.setHandoff(b, f);
+            });
+        }, "ambient-photo").start();
     }
 
     private void cancelAmbient() {
         restoreTimeout();
+        PhotoDream.setHandoff(null, null);
         endAmbient(true);
     }
 
@@ -362,7 +436,9 @@ public final class HomeActivity extends Activity {
         if (!ambient) return;
         ambient = false;
         main.removeCallbacks(ambientGiveUp);
-        for (View v : new View[] {ambientShade, ambientContent}) {
+        for (android.animation.Animator a : ambientAnims) a.cancel();
+        ambientAnims.clear();
+        for (View v : ambientLayers()) {
             v.animate().cancel();
             if (fade) {
                 v.animate().alpha(0f).setDuration(250).withEndAction(() -> v.setVisibility(View.GONE)).start();
@@ -370,6 +446,8 @@ public final class HomeActivity extends Activity {
                 v.setVisibility(View.GONE);
             }
         }
+        // The dream now owns the shared photo; drop our reference so it can be freed with it.
+        if (!fade) ambientPhoto.setImageDrawable(null);
     }
 
     private void restoreTimeout() {
@@ -988,6 +1066,23 @@ public final class HomeActivity extends Activity {
         t.setShadowLayer(dp(6), 0, dp(1), 0x99000000);
         t.setFocusable(false);
         return t;
+    }
+
+    /** Text styled exactly like PhotoDream's, so the hand-off matches pixel for pixel. */
+    private TextView dreamText(float sp, String family) {
+        TextView t = new TextView(this);
+        t.setTextColor(Color.WHITE);
+        t.setTextSize(sp);
+        t.setTypeface(Typeface.create(family, Typeface.NORMAL));
+        t.setShadowLayer(dp(8), 0, dp(1), 0x80000000);
+        return t;
+    }
+
+    private static LinearLayout.LayoutParams centered(int w, int h, int top) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, h);
+        lp.gravity = Gravity.CENTER_HORIZONTAL;
+        lp.topMargin = top;
+        return lp;
     }
 
     private static FrameLayout.LayoutParams fill() {
