@@ -31,13 +31,37 @@ foreach ($f in Get-ChildItem $Pasta -File | Where-Object Extension -match '^\.(j
                 8 { $img.RotateFlip([Drawing.RotateFlipType]::Rotate270FlipNone) }
             }
         }
-        # Cover the screen (the TV crops the overflow), never upscale.
-        $s = [Math]::Min(1.0, [Math]::Max($W / $img.Width, $H / $img.Height))
-        $nw = [int][Math]::Round($img.Width * $s); $nh = [int][Math]::Round($img.Height * $s)
-        $bmp = New-Object Drawing.Bitmap $nw, $nh
-        $g = [Drawing.Graphics]::FromImage($bmp)
-        $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-        $g.DrawImage($img, 0, 0, $nw, $nh)
+        if ($img.Width / $img.Height -ge 1.7) {
+            # Already widescreen: cover the screen (the TV crops the small overflow), never upscale.
+            $s = [Math]::Min(1.0, [Math]::Max($W / $img.Width, $H / $img.Height))
+            $nw = [int][Math]::Round($img.Width * $s); $nh = [int][Math]::Round($img.Height * $s)
+            $bmp = New-Object Drawing.Bitmap $nw, $nh
+            $g = [Drawing.Graphics]::FromImage($bmp)
+            $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $g.DrawImage($img, 0, 0, $nw, $nh)
+        } else {
+            # Portrait, square or 4:3: keep the whole photo centred over a blurred, darkened copy of
+            # itself. It fills 90% of the height so the screensaver's slow zoom never cuts it.
+            $bmp = New-Object Drawing.Bitmap $W, $H
+            $g = [Drawing.Graphics]::FromImage($bmp)
+            $g.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $tiny = New-Object Drawing.Bitmap 32, 18
+            $tg = [Drawing.Graphics]::FromImage($tiny)
+            $tg.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $c = [Math]::Max(32 / $img.Width, 18 / $img.Height)
+            $tg.DrawImage($img, [float]((32 - $img.Width * $c) / 2), [float]((18 - $img.Height * $c) / 2), [float]($img.Width * $c), [float]($img.Height * $c))
+            $tg.Dispose()
+            $g.DrawImage($tiny, -40, -24, $W + 80, $H + 48)
+            $tiny.Dispose()
+            $g.FillRectangle((New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(110, 0, 0, 0))), 0, 0, $W, $H)
+            $s = [Math]::Min($H * 0.9 / $img.Height, $W * 0.9 / $img.Width)
+            $nw = [int]($img.Width * $s); $nh = [int]($img.Height * $s)
+            $x = [int](($W - $nw) / 2); $y = [int](($H - $nh) / 2)
+            for ($i = 12; $i -ge 2; $i -= 2) {
+                $g.FillRectangle((New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(14, 0, 0, 0))), $x - $i, $y - $i + 6, $nw + 2 * $i, $nh + 2 * $i)
+            }
+            $g.DrawImage($img, $x, $y, $nw, $nh)
+        }
         $n++
         $bmp.Save((Join-Path $out ("foto_{0:D4}.jpg" -f $n)), $jpeg, $params)
         $g.Dispose(); $bmp.Dispose(); $img.Dispose()
