@@ -1,0 +1,14 @@
+# Signing material: never committed (keep a private backup of both files)
+*.keystore
+*.jks
+signing.local
+.env
+.env.*
+
+# Build outputs
+tvhome/build/
+*.apk
+*.apk.idsig
+
+# Local screenshots from testing (curated ones live in docs/)
+capturas/
