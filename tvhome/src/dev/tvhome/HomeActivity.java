@@ -49,8 +49,9 @@ import java.util.Map;
 
 /**
  * Lightweight tvOS-style home screen: a row-based grid of app banners over a soft
- * colour wash taken from the focused app. Framework-only, no libraries.
+ * color wash taken from the focused app. Framework-only, no libraries.
  */
+@SuppressWarnings("unused") // started by the system through AndroidManifest.xml, not from code
 public final class HomeActivity extends Activity {
     private static final int COLS = 5;
     private static final String SETTINGS_PKG = "com.android.tv.settings/";
@@ -251,15 +252,12 @@ public final class HomeActivity extends Activity {
         ambientPhoto = new ImageView(this);
         ambientPhoto.setScaleType(ImageView.ScaleType.CENTER_CROP);
         root.addView(ambientPhoto, fill());
-        ambientPhotoShade = new View(this);
-        ambientPhotoShade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] {0x00000000, 0x8C000000}));
-        root.addView(ambientPhotoShade, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(280), Gravity.BOTTOM));
+        ambientPhotoShade = PhotoDream.addBottomShade(root);
 
         ambientIntro = new LinearLayout(this);
         ambientIntro.setOrientation(LinearLayout.VERTICAL);
-        ambientClock = dreamText(76, "sans-serif-light");
-        TextView caption = dreamText(16, "sans-serif");
+        ambientClock = PhotoDream.dreamText(this, 76, "sans-serif-light");
+        TextView caption = PhotoDream.dreamText(this, 16, "sans-serif");
         caption.setText("Modo ambiente");
         caption.setAlpha(0.75f);
         ambientProgress = new View(this);
@@ -273,16 +271,16 @@ public final class HomeActivity extends Activity {
         ambientCorner = new LinearLayout(this);
         ambientCorner.setOrientation(LinearLayout.VERTICAL);
         ambientCorner.setGravity(Gravity.END);
-        ambientCornerClock = dreamText(56, "sans-serif-light");
-        ambientCornerDate = dreamText(18, "sans-serif");
+        ambientCornerClock = PhotoDream.dreamText(this, 56, "sans-serif-light");
+        ambientCornerDate = PhotoDream.dreamText(this, 18, "sans-serif");
         ambientCornerDate.setAlpha(0.85f);
         ambientCornerClock.setGravity(Gravity.END);
         ambientCornerDate.setGravity(Gravity.END);
         ambientCorner.addView(ambientCornerClock);
         ambientCorner.addView(ambientCornerDate);
         FrameLayout.LayoutParams acp = wrap(Gravity.BOTTOM | Gravity.END);
-        acp.rightMargin = dp(64);
-        acp.bottomMargin = dp(48);
+        acp.rightMargin = dp(36);
+        acp.bottomMargin = dp(22);
         root.addView(ambientCorner, acp);
 
         for (View v : ambientLayers()) v.setVisibility(View.GONE);
@@ -299,7 +297,7 @@ public final class HomeActivity extends Activity {
         registerReceiver(packagesChanged, f);
         getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(network);
         registerReceiver(dreaming, new IntentFilter(Intent.ACTION_DREAMING_STARTED));
-        restoreTimeout(); // in case a previous run died mid hand-off
+        restoreTimeout(); // in case a previous run died during the hand-off
 
         reload();
     }
@@ -649,27 +647,29 @@ public final class HomeActivity extends Activity {
         if (!entries.isEmpty()) entries.get(0).view.requestFocus();
     }
 
-    @Override public void onBackPressed() {
-        if (moving != null) endMove();
-    }
-
     @Override public boolean dispatchKeyEvent(KeyEvent ev) {
+        boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
         if (ambient) {
             // Any key during the hand-off means "never mind".
-            if (ev.getAction() == KeyEvent.ACTION_DOWN) cancelAmbient();
+            if (down) cancelAmbient();
             return true;
         }
-        if (moving == null || ev.getAction() != KeyEvent.ACTION_DOWN) return super.dispatchKeyEvent(ev);
-        switch (ev.getKeyCode()) {
-            case KeyEvent.KEYCODE_DPAD_LEFT: moveBy(-1); return true;
-            case KeyEvent.KEYCODE_DPAD_RIGHT: moveBy(1); return true;
-            case KeyEvent.KEYCODE_DPAD_UP: moveBy(-COLS); return true;
-            case KeyEvent.KEYCODE_DPAD_DOWN: moveBy(COLS); return true;
-            case KeyEvent.KEYCODE_DPAD_CENTER:
-            case KeyEvent.KEYCODE_ENTER:
-            case KeyEvent.KEYCODE_BACK: endMove(); return true;
-            default: return true;
+        // Home is the root screen: Back never leaves it, it only drops an app being moved.
+        // (Handled here instead of the deprecated onBackPressed.)
+        if (ev.getKeyCode() == KeyEvent.KEYCODE_BACK) {
+            if (down && moving != null) endMove();
+            return true;
         }
+        if (moving == null || !down) return super.dispatchKeyEvent(ev);
+        switch (ev.getKeyCode()) {
+            case KeyEvent.KEYCODE_DPAD_LEFT -> moveBy(-1);
+            case KeyEvent.KEYCODE_DPAD_RIGHT -> moveBy(1);
+            case KeyEvent.KEYCODE_DPAD_UP -> moveBy(-COLS);
+            case KeyEvent.KEYCODE_DPAD_DOWN -> moveBy(COLS);
+            case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> endMove();
+            default -> { }
+        }
+        return true;
     }
 
     // ---- Loading -------------------------------------------------------------------------
@@ -725,16 +725,16 @@ public final class HomeActivity extends Activity {
         int[] px = new int[WASH_W * WASH_H];
         small.getPixels(px, 0, WASH_W, 0, 0, WASH_W, WASH_H);
         e.accent = accent(px);
-        for (int pass = 0; pass < 3; pass++) blur(px, WASH_W, WASH_H, 5);
+        for (int pass = 0; pass < 3; pass++) blur(px);
         tame(px, e.accent);
-        shade(px, WASH_W, WASH_H);
+        shade(px);
         small.setPixels(px, 0, WASH_W, 0, 0, WASH_W, WASH_H);
         e.wash = toGpu(small);
         e.banner = toGpu(sw);
     }
 
     /**
-     * Light banners (white Netflix/YouTube/Play tiles) would wash the screen pale grey: darken them
+     * Light banners (white Netflix/YouTube/Play tiles) would wash the screen pale gray: darken them
      * and lean toward a deep shade of the app's accent so white text keeps its contrast.
      */
     private static void tame(int[] px, int accent) {
@@ -753,7 +753,7 @@ public final class HomeActivity extends Activity {
         }
     }
 
-    /** Saturation-weighted average colour of the banner, pushed bright for the glow; white if it has none. */
+    /** Saturation-weighted average color of the banner, pushed bright for the glow; white if it has none. */
     private static int accent(int[] px) {
         float[] hsv = new float[3];
         double r = 0, g = 0, b = 0, sum = 0;
@@ -800,8 +800,8 @@ public final class HomeActivity extends Activity {
     }
 
     /**
-     * Frosted rounded panel, rendered once and only translated afterwards. The glow is a separate
-     * white mask so it can be tinted per app with a colour filter instead of being re-rasterised.
+     * Frosted rounded panel, rendered once and only translated afterward. The glow is a separate
+     * white mask so it can be tinted per app with a color filter instead of being re-rasterized.
      */
     private Bitmap drawRowPanel(boolean glowOnly) {
         int glow = dp(ROW_GLOW);
@@ -832,7 +832,7 @@ public final class HomeActivity extends Activity {
         return toGpu(b);
     }
 
-    /** Graphite tile with a white gear, in place of the stock grey Settings banner. */
+    /** Graphite tile with a white gear, in place of the stock gray Settings banner. */
     private static Bitmap drawSettings(int w, int h) {
         Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(b);
@@ -865,10 +865,11 @@ public final class HomeActivity extends Activity {
     }
 
     /** Bakes the top-to-bottom darkening and an edge vignette into the wash (no per-frame overlay). */
-    private static void shade(int[] px, int w, int h) {
+    private static void shade(int[] px) {
+        final int w = WASH_W, h = WASH_H;
         for (int y = 0; y < h; y++) {
             float t = y / (float) (h - 1);
-            float keep = t < 0.5f ? 0.82f - 0.3f * t : 0.67f - 1.0f * (t - 0.5f);
+            float keep = t < 0.5f ? 0.82f - 0.3f * t : 0.67f - (t - 0.5f);
             float dy = t * 2 - 1;
             for (int x = 0; x < w; x++) {
                 float dx = x / (float) (w - 1) * 2 - 1;
@@ -880,11 +881,12 @@ public final class HomeActivity extends Activity {
         }
     }
 
-    /** One horizontal + vertical box-blur pass over packed ARGB pixels. */
-    private static void blur(int[] px, int w, int h, int r) {
+    /** One horizontal + vertical box-blur pass (radius 5) over the wash's packed ARGB pixels. */
+    private static void blur(int[] px) {
+        final int r = 5;
         int[] tmp = new int[px.length];
-        boxPass(px, tmp, w, h, r, 1, w);
-        boxPass(tmp, px, h, w, r, w, 1);
+        boxPass(px, tmp, WASH_W, WASH_H, r, 1, WASH_W);
+        boxPass(tmp, px, WASH_H, WASH_W, r, WASH_W, 1);
     }
 
     private static void boxPass(int[] src, int[] dst, int len, int lines, int r, int step, int lineStep) {
@@ -948,7 +950,10 @@ public final class HomeActivity extends Activity {
     }
 
     private float tileX(int i) { return dp(SIDE) + (i % COLS) * colStep; }
-    private float tileY(int i) { return dp(SHELF_ROW_Y) + (i / COLS) * rowStep; }
+    private float tileY(int i) {
+        int row = i / COLS; // integer division on purpose: index -> row
+        return dp(SHELF_ROW_Y) + row * rowStep;
+    }
 
     /** Real layout position (focus search ignores translation); moves animate via translation. */
     private void place(Entry e, int i, boolean animate) {
@@ -1091,16 +1096,6 @@ public final class HomeActivity extends Activity {
         t.setTypeface(Typeface.create(bold ? "sans-serif-medium" : "sans-serif", Typeface.NORMAL));
         t.setShadowLayer(dp(6), 0, dp(1), 0x99000000);
         t.setFocusable(false);
-        return t;
-    }
-
-    /** Text styled exactly like PhotoDream's, so the hand-off matches pixel for pixel. */
-    private TextView dreamText(float sp, String family) {
-        TextView t = new TextView(this);
-        t.setTextColor(Color.WHITE);
-        t.setTextSize(sp);
-        t.setTypeface(Typeface.create(family, Typeface.NORMAL));
-        t.setShadowLayer(dp(8), 0, dp(1), 0x80000000);
         return t;
     }
 

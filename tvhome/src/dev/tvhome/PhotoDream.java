@@ -1,5 +1,6 @@
 package dev.tvhome;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
@@ -65,12 +66,12 @@ public final class PhotoDream extends DreamService {
         return b;
     }
 
-    static File pickPhoto(android.content.Context c) {
+    static File pickPhoto(Context c) {
         File[] files = listPhotos(c);
         return files == null || files.length == 0 ? null : files[new Random().nextInt(files.length)];
     }
 
-    private static File[] listPhotos(android.content.Context c) {
+    private static File[] listPhotos(Context c) {
         File dir = c.getExternalFilesDir("fotos");
         return dir == null ? null : dir.listFiles((d, n) -> n.toLowerCase(Locale.ROOT).matches(".*\\.(jpe?g|png|webp)"));
     }
@@ -100,16 +101,13 @@ public final class PhotoDream extends DreamService {
         root.addView(back, fill());
         root.addView(front, fill());
 
-        shade = new View(this);
-        shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] {0x00000000, 0x8C000000}));
-        root.addView(shade, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, dp(280), Gravity.BOTTOM));
+        shade = addBottomShade(root);
 
         when = new LinearLayout(this);
         when.setOrientation(LinearLayout.VERTICAL);
         when.setGravity(Gravity.END);
-        clock = text(56, "sans-serif-light");
-        date = text(18, "sans-serif");
+        clock = dreamText(this, 56, "sans-serif-light");
+        date = dreamText(this, 18, "sans-serif");
         date.setAlpha(0.85f);
         // Children of a vertical LinearLayout default to full width, so align the text itself.
         clock.setGravity(Gravity.END);
@@ -118,8 +116,9 @@ public final class PhotoDream extends DreamService {
         when.addView(date);
         FrameLayout.LayoutParams wp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
                 FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.END);
-        wp.rightMargin = dp(64);
-        wp.bottomMargin = dp(48);
+        // Close to the corner but still inside the TV-safe area; HomeActivity's hand-off clock matches.
+        wp.rightMargin = dp(36);
+        wp.bottomMargin = dp(22);
         root.addView(when, wp);
 
         setContentView(root);
@@ -191,7 +190,7 @@ public final class PhotoDream extends DreamService {
         }, "dream-decode").start();
     }
 
-    static Bitmap decode(android.content.Context c, File f) {
+    static Bitmap decode(Context c, File f) {
         DisplayMetrics m = c.getResources().getDisplayMetrics();
         BitmapFactory.Options o = new BitmapFactory.Options();
         o.inJustDecodeBounds = true;
@@ -250,13 +249,25 @@ public final class PhotoDream extends DreamService {
         return v;
     }
 
-    private TextView text(float sp, String family) {
-        TextView t = new TextView(this);
+    // Shared with HomeActivity's hand-off overlay, so both draw the clock block identically.
+
+    static TextView dreamText(Context c, float sp, String family) {
+        float d = c.getResources().getDisplayMetrics().density;
+        TextView t = new TextView(c);
         t.setTextColor(Color.WHITE);
         t.setTextSize(sp);
         t.setTypeface(Typeface.create(family, Typeface.NORMAL));
-        t.setShadowLayer(dp(8), 0, dp(1), 0x80000000);
+        t.setShadowLayer(8 * d, 0, d, 0x80000000);
         return t;
+    }
+
+    /** Darkening at the bottom of the photo so the corner clock stays readable. */
+    static View addBottomShade(FrameLayout root) {
+        float d = root.getResources().getDisplayMetrics().density;
+        View v = new View(root.getContext());
+        v.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] {0x00000000, 0x8C000000}));
+        root.addView(v, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, Math.round(280 * d), Gravity.BOTTOM));
+        return v;
     }
 
     private static FrameLayout.LayoutParams fill() {
