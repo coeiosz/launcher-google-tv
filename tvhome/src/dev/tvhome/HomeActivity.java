@@ -209,6 +209,9 @@ public final class HomeActivity extends Activity {
         clock = text(28, false);
         date = text(14, false);
         date.setAlpha(0.75f);
+        // Children of a vertical LinearLayout default to full width, so align the text itself.
+        clock.setGravity(Gravity.END);
+        date.setGravity(Gravity.END);
         when.addView(clock);
         when.addView(date);
         FrameLayout.LayoutParams cp = wrap(Gravity.TOP | Gravity.END);
@@ -273,6 +276,8 @@ public final class HomeActivity extends Activity {
         ambientCornerClock = dreamText(56, "sans-serif-light");
         ambientCornerDate = dreamText(18, "sans-serif");
         ambientCornerDate.setAlpha(0.85f);
+        ambientCornerClock.setGravity(Gravity.END);
+        ambientCornerDate.setGravity(Gravity.END);
         ambientCorner.addView(ambientCornerClock);
         ambientCorner.addView(ambientCornerDate);
         FrameLayout.LayoutParams acp = wrap(Gravity.BOTTOM | Gravity.END);

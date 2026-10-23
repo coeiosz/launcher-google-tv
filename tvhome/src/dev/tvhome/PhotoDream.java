@@ -111,6 +111,9 @@ public final class PhotoDream extends DreamService {
         clock = text(56, "sans-serif-light");
         date = text(18, "sans-serif");
         date.setAlpha(0.85f);
+        // Children of a vertical LinearLayout default to full width, so align the text itself.
+        clock.setGravity(Gravity.END);
+        date.setGravity(Gravity.END);
         when.addView(clock);
         when.addView(date);
         FrameLayout.LayoutParams wp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT,
