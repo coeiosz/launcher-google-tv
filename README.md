@@ -59,11 +59,19 @@ Para voltar à tela do Google: `tvhome\revert-home.ps1`.
 `PhotoDream` mostra as fotos da pasta `fotos/` (fora do Git) em ordem aleatória, com zoom lento, transição suave, relógio e data.
 
 ```powershell
-.\tvhome\fotos-sync.ps1                          # envia fotos/ para a TV (JPG/PNG/BMP; gira pelo EXIF e reduz para 1080p)
+.\tvhome\fotos-sync.ps1                          # envia fotos/ para a TV, cortando em 16:9 em volta dos rostos
+.\tvhome\fotos-sync.ps1 -Previa                  # só gera a prévia de todos os cortes, sem enviar
 adb shell settings put secure screensaver_components dev.tvhome/dev.tvhome.PhotoDream   # uma vez
 ```
 
 Entra sozinho após o tempo de inatividade da TV ou pelo atalho **Modo ambiente**.
+
+O corte usa o detector de rostos YuNet (OpenCV): as fotos são cortadas em 16:9 mantendo os rostos; as sem rosto, ou estreitas demais, aparecem inteiras sobre um fundo desfocado. Para ajustar uma foto, crie `fotos/cortes.json`, por exemplo `{"foto.jpg": "inteira", "outra.jpg": 0.2}` (0 = corte no topo, 1 = embaixo). Requer uma vez:
+
+```powershell
+py -3.13 -m pip install --target "$env:LOCALAPPDATA\tvhome-py" pillow opencv-python-headless
+Invoke-WebRequest https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx -OutFile "$env:LOCALAPPDATA\tvhome-py\face_detection_yunet_2023mar.onnx"
+```
 
 ## Scripts de apoio
 
