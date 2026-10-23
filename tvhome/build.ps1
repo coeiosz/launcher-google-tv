@@ -1,6 +1,6 @@
 # Builds tvhome.apk with the bare SDK tools (no Gradle): aapt2 -> javac -> d8 -> zipalign -> apksigner.
-# Usage: .\build.ps1 [-Install] [-Tv 192.168.0.126:38227]
-param([switch]$Install, [string]$Tv = "192.168.0.126:38227")
+# Usage: .\build.ps1 [-Install] [-Tv 192.168.0.126:PORT]   (without -Tv, uses the TV adb is connected to)
+param([switch]$Install, [string]$Tv = "")
 $ErrorActionPreference = "Stop"
 
 $sdk   = "$env:LOCALAPPDATA\Android\Sdk"
@@ -47,6 +47,12 @@ Run "$bt\apksigner.bat" sign --ks $ks --ks-pass "file:$pw" --out "$root\tvhome.a
 Write-Host ("Built tvhome.apk ({0:N0} KB)" -f ((Get-Item "$root\tvhome.apk").Length / 1KB))
 
 if ($Install) {
+    if (-not $Tv) {
+        # Wireless debugging picks a new port on every TV reboot, so take whatever adb has connected.
+        $dev = & $adb devices | Select-String "^(192\.168\.\S+)\s+device$" | Select-Object -First 1
+        if (-not $dev) { throw "Nenhuma TV conectada: ligue a Depuração sem fio e rode adb connect IP:PORTA" }
+        $Tv = $dev.Matches[0].Groups[1].Value
+    }
     Run $adb -s $Tv install -r "$root\tvhome.apk"
     # Reinstalling kills the launcher, which would leave whatever app was underneath on screen.
     Run $adb -s $Tv shell am start -a android.intent.action.MAIN -c android.intent.category.HOME

@@ -15,3 +15,7 @@ capturas/
 
 # Personal photos for the screensaver
 fotos/
+
+# IntelliJ (local setup)
+.idea/
+*.iml
