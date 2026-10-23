@@ -31,7 +31,7 @@ import java.util.Random;
  * ahead at a time, straight into GPU memory; each slowly zooms (Ken Burns) and crossfades.
  */
 public final class PhotoDream extends DreamService {
-    private static final long SHOW_MS = 12_000, FADE_MS = 1_600;
+    private static final long SHOW_MS = 7_000, FADE_MS = 1_200;
     private static final float ZOOM = 1.08f;
 
     private final Handler main = new Handler(Looper.getMainLooper());
