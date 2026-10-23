@@ -481,6 +481,8 @@ public final class HomeActivity extends Activity {
         bg.setColor(0x26FFFFFF);
         v.setBackground(bg);
         v.setFocusable(true);
+        v.setOutlineAmbientShadowColor(Color.WHITE);
+        v.setOutlineSpotShadowColor(Color.WHITE);
 
         Glyph g = new Glyph(glyph);
         g.setColor(Color.WHITE);
@@ -514,7 +516,7 @@ public final class HomeActivity extends Activity {
             int fg = has ? 0xFF15161A : Color.WHITE;
             t.setTextColor(fg);
             g.setColor(fg);
-            v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).setDuration(150).setInterpolator(ease).start();
+            v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).translationZ(has ? dp(10) : 0).setDuration(150).setInterpolator(ease).start();
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = dp(12);
