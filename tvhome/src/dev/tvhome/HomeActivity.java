@@ -15,19 +15,7 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.ColorFilter;
-import android.graphics.LinearGradient;
-import android.graphics.Matrix;
-import android.graphics.Outline;
-import android.graphics.Paint;
-import android.graphics.PixelFormat;
-import android.graphics.PorterDuff;
-import android.graphics.Rect;
-import android.graphics.Shader;
-import android.graphics.Typeface;
+import android.graphics.*;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
@@ -48,6 +36,10 @@ import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.graphics.BlurMaskFilter;
+import android.graphics.RectF;
+import android.graphics.drawable.LayerDrawable;
+
 
 import java.text.Collator;
 import java.util.ArrayList;
@@ -479,10 +471,9 @@ public final class HomeActivity extends Activity {
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(18));
         bg.setColor(0x26FFFFFF);
-        v.setBackground(bg);
+        PillGlow glow = new PillGlow(dp(10),dp(18));
+        v.setBackground(new LayerDrawable(new Drawable[] {glow, bg}));
         v.setFocusable(true);
-        v.setOutlineAmbientShadowColor(Color.WHITE);
-        v.setOutlineSpotShadowColor(Color.WHITE);
 
         Glyph g = new Glyph(glyph);
         g.setColor(Color.WHITE);
@@ -516,7 +507,13 @@ public final class HomeActivity extends Activity {
             int fg = has ? 0xFF15161A : Color.WHITE;
             t.setTextColor(fg);
             g.setColor(fg);
-            v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).translationZ(has ? dp(10) : 0).setDuration(150).setInterpolator(ease).start();
+            v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).setDuration(150).setInterpolator(ease).start();
+
+        ValueAnimator fade = ValueAnimator.ofInt(has ? 0 : 255, has ? 255 : 0);
+        fade.setDuration(150);
+        fade.addUpdateListener(a -> glow.setAlpha((int) a.getAnimatedValue()));
+        fade.start();
+
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = dp(12);
@@ -525,6 +522,28 @@ public final class HomeActivity extends Activity {
     }
 
     /** Small line icons for the shortcut pills, drawn with paths instead of image assets. */
+    private static final class PillGlow extends Drawable {
+        private static final int COLOR = 0x50FFFFFF; //os 2 números após o x controlam a opacidade e as letras são um hex de cor.
+        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Float radius;
+
+        PillGlow(float blur, float radius) {
+            this.radius = radius;
+            p.setColor(COLOR);
+            p.setMaskFilter(new BlurMaskFilter(blur, BlurMaskFilter.Blur.OUTER)); // borra fora da pilula.
+            p.setAlpha(0);
+        }
+
+        @Override public void draw(Canvas c) {
+            c.drawRoundRect(new RectF(getBounds()),radius, radius, p);
+        }
+
+        @Override public void setAlpha(int alpha) { p.setAlpha(alpha * Color.alpha(COLOR) / 255);
+            invalidateSelf(); }
+        @Override public void setColorFilter(ColorFilter cf) { }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
     private static final class Glyph extends Drawable {
         static final int WIFI = 0, PAD = 1, TV = 2, MOON = 3;
         private final int type;
