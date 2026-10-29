@@ -16,6 +16,9 @@ capturas/
 # Personal photos for the screensaver
 fotos/
 
+# Personal PC remote for the TVs (local only)
+controle/
+
 # IntelliJ (local setup)
 .idea/
 *.iml
