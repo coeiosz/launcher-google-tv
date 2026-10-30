@@ -11,7 +11,7 @@ if ($Start) {
     & $adb -s $Tv shell "pm enable com.google.android.tungsten.setupwraith; pm enable com.google.android.apps.tv.launcherx; am force-stop com.google.android.apps.tv.dreamx"
     Write-Host "Ajuste liberado: Configuracoes > Sistema > Protetor de tela ambiente. Use Voltar, nao Home."
 } elseif ($End) {
-    & $adb -s $Tv shell "pm disable-user --user 0 com.google.android.tungsten.setupwraith; cmd package set-home-activity dev.tvhome/.HomeActivity; pm disable-user --user 0 com.google.android.apps.tv.launcherx"
+    & $adb -s $Tv shell "pm disable-user --user 0 com.google.android.tungsten.setupwraith; cmd package set-home-activity dev.tvhome/.HomeActivity; pm disable-user --user 0 com.google.android.apps.tv.launcherx; pm enable com.google.android.tungsten.setupwraith"
     Write-Host "Ajuste encerrado: tela inicial dev.tvhome restaurada."
 } else {
     Write-Host "Use -Start ou -End."

@@ -46,13 +46,23 @@ adb shell pm grant dev.tvhome android.permission.BLUETOOTH_CONNECT   # atalho Pa
 adb shell pm disable-user --user 0 com.google.android.tungsten.setupwraith
 adb shell cmd package set-home-activity dev.tvhome/.HomeActivity
 adb shell pm disable-user --user 0 com.google.android.apps.tv.launcherx
+adb shell pm enable com.google.android.tungsten.setupwraith      # necessário para o Cast (veja abaixo)
 ```
 
-Para voltar à tela do Google: `tvhome\revert-home.ps1`.
+Para voltar à tela do Google: `tvhome
+evert-home.ps1`.
 
-> Desativar só o `launcherx` faz a TV entrar em loop na tela de recuperação do Google (tela preta). Sempre desative o `setupwraith` antes.
+> Desativar o `launcherx` com o `setupwraith` ativo e sem o `dev.tvhome` fixado faz a TV entrar em loop na tela de recuperação do Google (tela preta). Por isso a ordem acima: desativa o `setupwraith`, fixa o `dev.tvhome` (preferido para HOME com `mAlways=true`), desativa o `launcherx` e só então reativa o `setupwraith`. Com isso, ao apertar Home a `RecoveryActivity` abre por um instante, registra `LauncherX HomeActivity not found on device. Skipping enable.` e fecha, caindo no `dev.tvhome`.
 
-> Efeito colateral: o modo ambiente do Google obtém o ID da Chromecast pelo `setupwraith` e suas configurações dependem do `launcherx`. Com os dois desativados ele só mostra imagens genéricas. Por isso o launcher traz o próprio protetor de tela (abaixo); `ambiente-config.ps1 -Start`/`-End` continua disponível para mexer no do Google.
+> **O `setupwraith` precisa ficar ativo para o Cast e o Google Home.** Ele guarda o `CastInfoProvider`, de onde o Cast (`mediashell`) carrega a credencial do aparelho. Sem ele o log mostra `Cannot get device credentials` / `No private key, hence empty signature`, o celular recusa a conexão e o Google Home mostra a Chromecast como desconectada. Para o Cast recarregar a credencial sem reiniciar a TV:
+>
+> ```powershell
+> adb shell "am force-stop com.google.android.apps.mediashell; am start-foreground-service -n com.google.android.apps.mediashell/.MediaShellCastReceiverService"
+> ```
+>
+> O log deve mostrar `Imported client auth private key`.
+
+> Efeito colateral: as configurações do modo ambiente do Google dependem do `launcherx`; com ele desativado o modo ambiente do Google não é configurável. Por isso o launcher traz o próprio protetor de tela (abaixo); `ambiente-config.ps1 -Start`/`-End` continua disponível para mexer no do Google.
 
 ## Protetor de tela com suas fotos
 
@@ -84,3 +94,9 @@ Invoke-WebRequest https://github.com/opencv/opencv_zoo/raw/main/models/face_dete
 | `tvhome/fotos-sync.ps1` | Prepara e envia as fotos de `fotos/` para o protetor de tela |
 | `tvhome/ambiente-config.ps1` | `-Start`/`-End`: reativa temporariamente `setupwraith` e `launcherx` para ajustar o modo ambiente e atualizar as fotos da conta (não aperte Home enquanto estiver ativo) |
 | `tv-setup/restaurar-tv.ps1` | Reativa os apps desativados no debloat |
+
+## Solução de problemas
+
+- **Google Home mostra a Chromecast desconectada:** confira se o `setupwraith` está ativo (`adb shell pm list packages -d | findstr setupwraith` não deve listar nada) e recarregue o Cast como em [Tornar tela inicial](#tornar-tela-inicial-e-desfazer).
+- **`adb connect` recusado ou `failed to connect`:** a depuração por Wi-Fi desligou ou a TV esqueceu o PC. Sem controle físico, use `controle\Controle.cmd` (porta 6466, não depende do ADB) e a tecla Configurações para chegar em Sistema > Opções do desenvolvedor > Depuração por Wi-Fi. Ative e, se o `connect` falhar, use "Parear o dispositivo com um código de pareamento": `adb pair IP:PORTA CÓDIGO` e depois `adb connect` na porta mostrada na tela da depuração (`adb mdns services` lista as duas).
+- **Sem controle físico:** o controle da TV LG comanda a Chromecast via HDMI-CEC; também servem o controle remoto do app Google Home e o `controle\Controle.cmd`. Para parear um controle novo, use o atalho Parear controle.
