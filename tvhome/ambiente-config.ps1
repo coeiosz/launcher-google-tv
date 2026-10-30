@@ -1,8 +1,9 @@
 # The ambient app reads the Chromecast's cast ID from setupwraith, and its settings screen reads the
-# account mode from launcherx; both must stay disabled for dev.tvhome to be the home screen. This turns
-# them on only while ambient settings are being changed.
-#   .\ambiente-config.ps1 -Start   -> enables setupwraith (DON'T press Home until -End)
-#   .\ambiente-config.ps1 -End     -> disables it again and restores dev.tvhome as home
+# account mode from launcherx. launcherx must stay disabled for dev.tvhome to be the home screen;
+# setupwraith stays enabled because Cast loads the device credentials from it. This turns launcherx on
+# only while ambient settings are being changed.
+#   .\ambiente-config.ps1 -Start   -> enables launcherx (DON'T press Home until -End)
+#   .\ambiente-config.ps1 -End     -> disables it again, restores dev.tvhome as home, re-enables setupwraith
 param([switch]$Start, [switch]$End, [string]$Tv = "")
 $adb = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
 if (-not $Tv) { $Tv = (& $adb devices | Select-String "^192\.168\.\S+\s+device" | Select-Object -First 1).ToString().Split()[0] }
