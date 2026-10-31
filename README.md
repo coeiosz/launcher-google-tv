@@ -12,6 +12,11 @@ Launcher leve no estilo Apple TV e scripts de manutenção para uma **Chromecast
 | `tv-setup/` | Debloat aplicado na TV e script para desfazer |
 | `docs/` | Capturas de tela |
 
+## Uso de IA
+
+- Desenvolvido com auxílio do [Claude Code](https://claude.com/claude-code).
+- O recorte das fotos do protetor de tela usa o detector de rostos [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) (rede neural do OpenCV) para manter os rostos no enquadramento 16:9.
+
 ## Launcher
 
 - Grade de banners com foco ampliado, sombra e reflexo; painel com glow na cor do app em foco.
@@ -49,8 +54,7 @@ adb shell pm disable-user --user 0 com.google.android.apps.tv.launcherx
 adb shell pm enable com.google.android.tungsten.setupwraith      # necessário para o Cast (veja abaixo)
 ```
 
-Para voltar à tela do Google: `tvhome
-evert-home.ps1`.
+Para voltar à tela do Google: `tvhome\revert-home.ps1`.
 
 > Desativar o `launcherx` com o `setupwraith` ativo e sem o `dev.tvhome` fixado faz a TV entrar em loop na tela de recuperação do Google (tela preta). Por isso a ordem acima: desativa o `setupwraith`, fixa o `dev.tvhome` (preferido para HOME com `mAlways=true`), desativa o `launcherx` e só então reativa o `setupwraith`. Com isso, ao apertar Home a `RecoveryActivity` abre por um instante, registra `LauncherX HomeActivity not found on device. Skipping enable.` e fecha, caindo no `dev.tvhome`.
 
