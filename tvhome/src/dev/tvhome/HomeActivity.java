@@ -1,10 +1,6 @@
 package dev.tvhome;
 
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.Keyframe;
 import android.animation.ObjectAnimator;
-import android.animation.PropertyValuesHolder;
 import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.content.BroadcastReceiver;
@@ -15,19 +11,31 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
-import android.graphics.*;
-import android.graphics.drawable.Drawable;
+import android.graphics.Bitmap;
+import android.graphics.BlurMaskFilter;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Outline;
+import android.graphics.Paint;
+import android.graphics.PorterDuff;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
-import android.provider.Settings;
-import android.widget.LinearLayout;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.text.format.DateFormat;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -35,17 +43,22 @@ import android.view.ViewOutlineProvider;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
-import android.graphics.BlurMaskFilter;
-import android.graphics.RectF;
-import android.graphics.drawable.LayerDrawable;
 
-
+import java.io.File;
 import java.text.Collator;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+
+import dev.tvhome.Drawables.Glyph;
+import dev.tvhome.Drawables.PillGlow;
+import dev.tvhome.Drawables.Shine;
 
 /**
  * Lightweight tvOS-style home screen: a row-based grid of app banners over a soft
@@ -53,9 +66,10 @@ import java.util.Map;
  */
 @SuppressWarnings("unused") // started by the system through AndroidManifest.xml, not from code
 public final class HomeActivity extends Activity {
+    private static final String TAG = "tvhome";
     private static final int COLS = 5;
     private static final String SETTINGS_PKG = "com.android.tv.settings/";
-    private static final String PREF_ORDER = "order";
+    private static final String PREF_ORDER = "order", PREF_HIDDEN = "hidden";
 
     // Layout in dp, for the 960x540dp TV canvas.
     private static final float SIDE = 64, GAP = 32, ROW_GAP = 46, TILE_W = 140;
@@ -63,15 +77,19 @@ public final class HomeActivity extends Activity {
     private static final float FOCUS_SCALE = 1.12f, MOVE_SCALE = 1.2f;
     // Focused-row panel: padding around the tiles (and their label) and the glow margin, in dp.
     private static final float ROW_PAD_X = 22, ROW_PAD_TOP = 16, ROW_PAD_BOTTOM = 38, ROW_GLOW = 18, ROW_RADIUS = 24;
-
-    // The wash is blurred at this tiny size and upscaled by the GPU for free.
-    private static final int WASH_W = 64, WASH_H = 36;
+    private static final long RELOAD_DEBOUNCE_MS = 300;
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final DecelerateInterpolator ease = new DecelerateInterpolator(2f);
     private final List<Entry> entries = new ArrayList<>();
+    // One shared shine, attached only to the focused tile so idle tiles cost nothing.
+    private final Shine shine = new Shine();
 
     private SharedPreferences prefs;
+    private Ambient ambient;
+    private TileMenu menu;
+    private TileCache cache;
+    private Load lastLoad; // the shown load, hidden apps included; hide/unhide re-show it
     private FrameLayout grid;
     private FrameLayout rowPanel;
     private ImageView rowGlow;
@@ -85,16 +103,8 @@ public final class HomeActivity extends Activity {
     private int tileW, tileH, colStep, rowStep, radius;
     private int focusedRow = -1;
     private Entry focused, moving;
+    private boolean restoring; // show() is moving focus to a reloaded copy of the focused tile
     private Bitmap shownWash;
-
-    private static final class Entry {
-        String key;
-        CharSequence name;
-        Intent intent;
-        Bitmap banner, wash;
-        int accent;
-        ImageView view;
-    }
 
     private final ViewOutlineProvider rounded = new ViewOutlineProvider() {
         @Override public void getOutline(View v, Outline o) {
@@ -102,55 +112,16 @@ public final class HomeActivity extends Activity {
         }
     };
 
-    private final Shine shine = new Shine();
-
-    /** Glass highlight for the focused tile: a soft top gloss plus one diagonal sweep on focus. */
-    private final class Shine extends Drawable {
-        private final Paint gloss = new Paint(), band = new Paint();
-        private final Matrix shift = new Matrix();
-        private final ValueAnimator anim = ValueAnimator.ofFloat(0f, 1f);
-        private LinearGradient bandShader;
-        private float pos = -1f;
-
-        Shine() {
-            anim.setDuration(750);
-            anim.setInterpolator(ease);
-            anim.addUpdateListener(a -> { pos = (float) a.getAnimatedValue(); invalidateSelf(); });
-            anim.addListener(new AnimatorListenerAdapter() {
-                @Override public void onAnimationEnd(Animator a) { pos = -1f; invalidateSelf(); }
-            });
-        }
-
-        void sweep() {
-            anim.cancel();
-            anim.start();
-        }
-
-        @Override protected void onBoundsChange(Rect b) {
-            int h = b.height(), bw = Math.round(h * 0.9f);
-            gloss.setShader(new LinearGradient(0, 0, 0, h * 0.55f, 0x2EFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
-            bandShader = new LinearGradient(0, 0, bw, bw, new int[] {0x00FFFFFF, 0x55FFFFFF, 0x00FFFFFF},
-                    new float[] {0f, 0.5f, 1f}, Shader.TileMode.CLAMP);
-            band.setShader(bandShader);
-        }
-
-        @Override public void draw(Canvas c) {
-            Rect b = getBounds();
-            c.drawRect(b.left, b.top, b.right, b.top + b.height() * 0.55f, gloss);
-            if (pos < 0 || bandShader == null) return;
-            float span = b.width() + b.height() * 1.8f;
-            shift.setTranslate(b.left - b.height() * 1.8f + pos * span, b.top);
-            bandShader.setLocalMatrix(shift);
-            c.drawRect(b, band);
-        }
-
-        @Override public void setAlpha(int alpha) { }
-        @Override public void setColorFilter(ColorFilter cf) { }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
+    // Main thread only. Every load gets a number; only the newest one's result is shown.
+    private int loadGen;
+    private final Runnable reloadNow = this::reload;
 
     private final BroadcastReceiver packagesChanged = new BroadcastReceiver() {
-        @Override public void onReceive(Context c, Intent i) { reload(); }
+        // An app update sends several broadcasts in a row: load once, after they settle.
+        @Override public void onReceive(Context c, Intent i) {
+            main.removeCallbacks(reloadNow);
+            main.postDelayed(reloadNow, RELOAD_DEBOUNCE_MS);
+        }
     };
 
     private final BroadcastReceiver tick = new BroadcastReceiver() {
@@ -166,6 +137,7 @@ public final class HomeActivity extends Activity {
         colStep = tileW + dp(GAP);
         rowStep = tileH + dp(ROW_GAP);
         radius = dp(12);
+        cache = new TileCache(new File(getCacheDir(), "tiles"), bannerW(), bannerW() * 9 / 16);
 
         FrameLayout root = new FrameLayout(this);
         root.setClipChildren(false);
@@ -198,6 +170,10 @@ public final class HomeActivity extends Activity {
         rowPanel.addView(body, fill());
         rowPanel.setFocusable(false);
         rowPanel.setAlpha(0f);
+        // Behind the tiles: first child of the grid, so it scrolls with the rows.
+        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(panelW, panelH);
+        pl.leftMargin = dp(SIDE) - dp(ROW_PAD_X) - dp(ROW_GLOW);
+        grid.addView(rowPanel, pl);
         glowAnim.setDuration(320);
         glowAnim.addUpdateListener(a -> {
             glowColor = (int) a.getAnimatedValue();
@@ -234,6 +210,8 @@ public final class HomeActivity extends Activity {
         label = text(15, true);
         label.setGravity(Gravity.CENTER_HORIZONTAL);
         label.setMaxLines(1);
+        // Also in the grid so it scrolls with it; kept above the tiles (see show and moveBy).
+        grid.addView(label, new FrameLayout.LayoutParams(Math.round(tileW * 1.5f), FrameLayout.LayoutParams.WRAP_CONTENT));
 
         hint = text(16, false);
         hint.setText("Use as setas para mover  •  OK para soltar");
@@ -242,48 +220,10 @@ public final class HomeActivity extends Activity {
         hp.bottomMargin = dp(28);
         root.addView(hint, hp);
 
-        // Ambient hand-off: a plain black layer (cheap to fade) plus a centred clock, both on top.
-        // The layers end exactly as PhotoDream starts (same photo, same corner clock), so the
-        // screensaver takes over with no visible cut.
-        ambientShade = new View(this);
-        ambientShade.setBackgroundColor(Color.BLACK);
-        root.addView(ambientShade, fill());
+        menu = new TileMenu(this, root);
 
-        ambientPhoto = new ImageView(this);
-        ambientPhoto.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        root.addView(ambientPhoto, fill());
-        ambientPhotoShade = PhotoDream.addBottomShade(root);
-
-        ambientIntro = new LinearLayout(this);
-        ambientIntro.setOrientation(LinearLayout.VERTICAL);
-        ambientClock = PhotoDream.dreamText(this, 76, "sans-serif-light");
-        TextView caption = PhotoDream.dreamText(this, 16, "sans-serif");
-        caption.setText("Modo ambiente");
-        caption.setAlpha(0.75f);
-        ambientProgress = new View(this);
-        ambientProgress.setBackgroundColor(0x99FFFFFF);
-        ambientIntro.addView(ambientClock, centered(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 0));
-        ambientIntro.addView(caption, centered(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 0));
-        ambientIntro.addView(ambientProgress, centered(dp(140), dp(2), dp(16)));
-        root.addView(ambientIntro, wrap(Gravity.CENTER));
-
-        // Same views, sizes and margins as PhotoDream's clock block.
-        ambientCorner = new LinearLayout(this);
-        ambientCorner.setOrientation(LinearLayout.VERTICAL);
-        ambientCorner.setGravity(Gravity.END);
-        ambientCornerClock = PhotoDream.dreamText(this, 56, "sans-serif-light");
-        ambientCornerDate = PhotoDream.dreamText(this, 18, "sans-serif");
-        ambientCornerDate.setAlpha(0.85f);
-        ambientCornerClock.setGravity(Gravity.END);
-        ambientCornerDate.setGravity(Gravity.END);
-        ambientCorner.addView(ambientCornerClock);
-        ambientCorner.addView(ambientCornerDate);
-        FrameLayout.LayoutParams acp = wrap(Gravity.BOTTOM | Gravity.END);
-        acp.rightMargin = dp(36);
-        acp.bottomMargin = dp(22);
-        root.addView(ambientCorner, acp);
-
-        for (View v : ambientLayers()) v.setVisibility(View.GONE);
+        // Last, so the hand-off overlay covers everything above.
+        ambient = new Ambient(this, root, prefs, main);
 
         // The opaque wash is the only full-screen layer: no window or root background.
         getWindow().setBackgroundDrawable(null);
@@ -296,21 +236,91 @@ public final class HomeActivity extends Activity {
         f.addDataScheme("package");
         registerReceiver(packagesChanged, f);
         getSystemService(ConnectivityManager.class).registerDefaultNetworkCallback(network);
-        registerReceiver(dreaming, new IntentFilter(Intent.ACTION_DREAMING_STARTED));
-        restoreTimeout(); // in case a previous run died during the hand-off
+        ambient.register();
 
         reload();
     }
 
     @Override protected void onDestroy() {
-        restoreTimeout();
-        unregisterReceiver(dreaming);
+        main.removeCallbacks(reloadNow);
+        ambient.unregister();
         unregisterReceiver(packagesChanged);
         getSystemService(ConnectivityManager.class).unregisterNetworkCallback(network);
         super.onDestroy();
     }
 
-    // ---- Top bar: date and shortcuts --------------------------------------------------------
+    @Override protected void onResume() {
+        super.onResume();
+        IntentFilter f = new IntentFilter(Intent.ACTION_TIME_TICK);
+        f.addAction(Intent.ACTION_TIME_CHANGED);
+        f.addAction(Intent.ACTION_TIMEZONE_CHANGED);
+        registerReceiver(tick, f);
+        updateClock();
+    }
+
+    @Override protected void onPause() {
+        unregisterReceiver(tick);
+        menu.close();
+        if (moving != null) endMove();
+        super.onPause();
+    }
+
+    /** Pressing Home while already home jumps back to the first app, like tvOS. */
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        menu.close();
+        if (moving != null) endMove();
+        if (!entries.isEmpty()) entries.get(0).view.requestFocus();
+    }
+
+    @Override public boolean dispatchKeyEvent(KeyEvent ev) {
+        boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
+        if (ambient.isActive()) {
+            // Any key during the hand-off means "never mind".
+            if (down) ambient.cancel();
+            return true;
+        }
+        // Home is the root screen: Back never leaves it, it only closes the menu or drops an app
+        // being moved. (Handled here instead of the deprecated onBackPressed.)
+        int code = ev.getKeyCode();
+        if (code == KeyEvent.KEYCODE_BACK) {
+            if (down) {
+                if (menu.isOpen()) menu.close();
+                else if (moving != null) endMove();
+            }
+            return true;
+        }
+        // Ups always go through, so the tile's pressed state from the long-press clears.
+        if (!down || (moving == null && !menu.isOpen())) return super.dispatchKeyEvent(ev);
+        // OK is still held from the long-press that opened the menu (and, after "Mover", from
+        // the press that chose it) and keeps repeating: only a fresh press acts.
+        boolean fresh = ev.getRepeatCount() == 0;
+        if (menu.isOpen()) {
+            switch (code) {
+                case KeyEvent.KEYCODE_DPAD_UP -> menu.move(-1);
+                case KeyEvent.KEYCODE_DPAD_DOWN -> menu.move(1);
+                case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    if (fresh) menu.choose();
+                }
+                default -> { }
+            }
+            return true;
+        }
+        switch (code) {
+            // Arrow repeats count: holding an arrow keeps moving the tile.
+            case KeyEvent.KEYCODE_DPAD_LEFT -> moveBy(-1);
+            case KeyEvent.KEYCODE_DPAD_RIGHT -> moveBy(1);
+            case KeyEvent.KEYCODE_DPAD_UP -> moveBy(-COLS);
+            case KeyEvent.KEYCODE_DPAD_DOWN -> moveBy(COLS);
+            case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                if (fresh) endMove();
+            }
+            default -> { }
+        }
+        return true;
+    }
+
+    // ---- Top bar: clock, network state and shortcuts ----------------------------------------
 
     private final ConnectivityManager.NetworkCallback network = new ConnectivityManager.NetworkCallback() {
         @Override public void onCapabilitiesChanged(Network n, NetworkCapabilities caps) {
@@ -320,136 +330,6 @@ public final class HomeActivity extends Activity {
 
         @Override public void onLost(Network n) { main.post(() -> setOnline(false)); }
     };
-
-    // ---- Ambient-mode shortcut --------------------------------------------------------------
-    // Starting a dream directly needs a system-only permission, so instead the screen-off
-    // timeout is dropped to the platform minimum; the dream then starts on its own and the
-    // saved timeout is put back as soon as it does (or on cancel, timeout, or next launch).
-
-    private static final int AMBIENT_DELAY_MS = 10_000, HANDOFF_MS = 9_600;
-    private static final String PREF_TIMEOUT = "savedScreenOffTimeout";
-    private View ambientShade, ambientPhotoShade, ambientProgress;
-    private ImageView ambientPhoto;
-    private LinearLayout ambientIntro, ambientCorner;
-    private TextView ambientClock, ambientCornerClock, ambientCornerDate;
-    private final List<android.animation.Animator> ambientAnims = new ArrayList<>();
-    private boolean ambient;
-    private final Runnable ambientGiveUp = this::cancelAmbient;
-
-    private final BroadcastReceiver dreaming = new BroadcastReceiver() {
-        @Override public void onReceive(Context c, Intent i) {
-            restoreTimeout();
-            // The dream window is on top by now; drop the overlay just after so nothing flashes.
-            main.postDelayed(() -> endAmbient(false), 600);
-        }
-    };
-
-    private View[] ambientLayers() {
-        return new View[] {ambientShade, ambientPhoto, ambientPhotoShade, ambientIntro, ambientCorner};
-    }
-
-    private void startAmbient() {
-        if (ambient) return;
-        if (!Settings.System.canWrite(this)) {
-            try {
-                startActivity(new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,
-                        android.net.Uri.parse("package:" + getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-            } catch (RuntimeException ignored) { }
-            return;
-        }
-        android.content.ContentResolver cr = getContentResolver();
-        if (!prefs.contains(PREF_TIMEOUT)) {
-            int current = Settings.System.getInt(cr, Settings.System.SCREEN_OFF_TIMEOUT, 600_000);
-            prefs.edit().putInt(PREF_TIMEOUT, current).commit();
-        }
-        Settings.System.putInt(cr, Settings.System.SCREEN_OFF_TIMEOUT, AMBIENT_DELAY_MS);
-        ambient = true;
-        main.postDelayed(ambientGiveUp, AMBIENT_DELAY_MS + 15_000);
-
-        ambientClock.setText(clock.getText());
-        ambientCornerClock.setText(clock.getText());
-        ambientCornerDate.setText(date.getText());
-        ambientPhoto.setImageDrawable(null);
-        for (View v : ambientLayers()) {
-            v.setAlpha(0f);
-            v.setVisibility(View.VISIBLE);
-        }
-        loadHandoffPhoto();
-
-        // 0-1.3s dim to a centred clock; a hairline fills while it breathes; from ~4.3s the
-        // first photo rises behind it; the centred clock gives way to the dream's corner clock.
-        animate(ambientShade, alpha(0, 0, .10f, .9f, .5f, 1));
-        animate(ambientIntro, alpha(0, 0, .04f, 0, .14f, 1, .62f, 1, .74f, 0),
-                scale(View.SCALE_X), scale(View.SCALE_Y));
-        ambientProgress.setScaleX(0f);
-        animate(ambientProgress, PropertyValuesHolder.ofKeyframe(View.SCALE_X,
-                Keyframe.ofFloat(0f, 0f), Keyframe.ofFloat(.08f, 0f), Keyframe.ofFloat(.70f, 1f), Keyframe.ofFloat(1f, 1f)));
-        ambientProgress.setAlpha(1f);
-        animate(ambientPhoto, alpha(0, 0, .45f, 0, .72f, 1));
-        animate(ambientPhotoShade, alpha(0, 0, .45f, 0, .72f, 1));
-        animate(ambientCorner, alpha(0, 0, .66f, 0, .84f, 1));
-    }
-
-    private void animate(View v, PropertyValuesHolder... values) {
-        ObjectAnimator a = ObjectAnimator.ofPropertyValuesHolder(v, values).setDuration(HANDOFF_MS);
-        a.start();
-        ambientAnims.add(a);
-    }
-
-    /** Alpha keyframes as (fraction, value) pairs. */
-    private static PropertyValuesHolder alpha(float... pairs) {
-        Keyframe[] k = new Keyframe[pairs.length / 2];
-        for (int i = 0; i < k.length; i++) k[i] = Keyframe.ofFloat(pairs[i * 2], pairs[i * 2 + 1]);
-        return PropertyValuesHolder.ofKeyframe(View.ALPHA, k);
-    }
-
-    private static PropertyValuesHolder scale(android.util.Property<View, Float> axis) {
-        return PropertyValuesHolder.ofKeyframe(axis, Keyframe.ofFloat(0f, .94f), Keyframe.ofFloat(.14f, 1f),
-                Keyframe.ofFloat(.62f, 1.04f), Keyframe.ofFloat(.74f, 1.1f), Keyframe.ofFloat(1f, 1.1f));
-    }
-
-    /** Decodes a random photo now and hands the same bitmap to PhotoDream, which opens on it. */
-    private void loadHandoffPhoto() {
-        new Thread(() -> {
-            java.io.File f = PhotoDream.pickPhoto(this);
-            Bitmap b = f == null ? null : PhotoDream.decode(this, f);
-            main.post(() -> {
-                if (!ambient || b == null) return;
-                ambientPhoto.setImageBitmap(b);
-                PhotoDream.setHandoff(b, f);
-            });
-        }, "ambient-photo").start();
-    }
-
-    private void cancelAmbient() {
-        restoreTimeout();
-        PhotoDream.setHandoff(null, null);
-        endAmbient(true);
-    }
-
-    private void endAmbient(boolean fade) {
-        if (!ambient) return;
-        ambient = false;
-        main.removeCallbacks(ambientGiveUp);
-        for (android.animation.Animator a : ambientAnims) a.cancel();
-        ambientAnims.clear();
-        for (View v : ambientLayers()) {
-            v.animate().cancel();
-            if (fade) {
-                v.animate().alpha(0f).setDuration(250).withEndAction(() -> v.setVisibility(View.GONE)).start();
-            } else {
-                v.setVisibility(View.GONE);
-            }
-        }
-        // The dream now owns the shared photo; drop our reference so it can be freed with it.
-        if (!fade) ambientPhoto.setImageDrawable(null);
-    }
-
-    private void restoreTimeout() {
-        if (!prefs.contains(PREF_TIMEOUT) || !Settings.System.canWrite(this)) return;
-        Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_OFF_TIMEOUT, prefs.getInt(PREF_TIMEOUT, 600_000));
-        prefs.edit().remove(PREF_TIMEOUT).commit();
-    }
 
     private static final String BT = "android.permission.BLUETOOTH_CONNECT";
     private Intent pendingShortcut;
@@ -474,7 +354,7 @@ public final class HomeActivity extends Activity {
         GradientDrawable bg = new GradientDrawable();
         bg.setCornerRadius(dp(18));
         bg.setColor(0x26FFFFFF);
-        PillGlow glow = new PillGlow(dp(10),dp(18));
+        PillGlow glow = new PillGlow(dp(10), dp(18));
         v.setBackground(new LayerDrawable(new Drawable[] {glow, bg}));
         v.setFocusable(true);
 
@@ -495,7 +375,8 @@ public final class HomeActivity extends Activity {
         if (intent != null) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         v.setOnClickListener(x -> {
             if (glyph == Glyph.MOON) {
-                startAmbient();
+                menu.close();
+                ambient.start(clock.getText(), date.getText());
                 return;
             }
             if (glyph == Glyph.PAD && checkSelfPermission(BT) != PackageManager.PERMISSION_GRANTED) {
@@ -511,12 +392,10 @@ public final class HomeActivity extends Activity {
             t.setTextColor(fg);
             g.setColor(fg);
             v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f).setDuration(150).setInterpolator(ease).start();
-
-        ValueAnimator fade = ValueAnimator.ofInt(has ? 0 : 255, has ? 255 : 0);
-        fade.setDuration(150);
-        fade.addUpdateListener(a -> glow.setAlpha((int) a.getAnimatedValue()));
-        fade.start();
-
+            ValueAnimator fade = ValueAnimator.ofInt(has ? 0 : 255, has ? 255 : 0);
+            fade.setDuration(150);
+            fade.addUpdateListener(a -> glow.setAlpha((int) a.getAnimatedValue()));
+            fade.start();
         });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = dp(12);
@@ -524,186 +403,167 @@ public final class HomeActivity extends Activity {
         return v;
     }
 
-    /** Small line icons for the shortcut pills, drawn with paths instead of image assets. */
-    private static final class PillGlow extends Drawable {
-        private static final int COLOR = 0x50FFFFFF; //os 2 números após o x controlam a opacidade e as letras são um hex de cor.
-        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Float radius;
-
-        PillGlow(float blur, float radius) {
-            this.radius = radius;
-            p.setColor(COLOR);
-            p.setMaskFilter(new BlurMaskFilter(blur, BlurMaskFilter.Blur.OUTER)); // borra fora da pilula.
-            p.setAlpha(0);
-        }
-
-        @Override public void draw(Canvas c) {
-            c.drawRoundRect(new RectF(getBounds()),radius, radius, p);
-        }
-
-        @Override public void setAlpha(int alpha) { p.setAlpha(alpha * Color.alpha(COLOR) / 255);
-            invalidateSelf(); }
-        @Override public void setColorFilter(ColorFilter cf) { }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
-
-    private static final class Glyph extends Drawable {
-        static final int WIFI = 0, PAD = 1, TV = 2, MOON = 3;
-        private final int type;
-        private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final android.graphics.RectF r = new android.graphics.RectF();
-        boolean off;
-
-        Glyph(int type) {
-            this.type = type;
-            p.setStrokeCap(Paint.Cap.ROUND);
-            p.setStrokeJoin(Paint.Join.ROUND);
-        }
-
-        void setColor(int c) {
-            p.setColor(c);
-            invalidateSelf();
-        }
-
-        @Override public void draw(Canvas c) {
-            Rect b = getBounds();
-            float s = Math.min(b.width(), b.height()), cx = b.exactCenterX(), cy = b.exactCenterY();
-            int color = p.getColor();
-            if (off) p.setAlpha(120);
-            p.setStyle(Paint.Style.STROKE);
-            p.setStrokeWidth(s * 0.1f);
-            switch (type) {
-                case WIFI: {
-                    float by = cy + s * 0.3f;
-                    for (int i = 1; i <= 3; i++) {
-                        float rad = s * 0.2f * i;
-                        r.set(cx - rad, by - rad, cx + rad, by + rad);
-                        c.drawArc(r, 225, 90, false, p);
-                    }
-                    p.setStyle(Paint.Style.FILL);
-                    c.drawCircle(cx, by, s * 0.07f, p);
-                    if (off) {
-                        p.setStyle(Paint.Style.STROKE);
-                        p.setAlpha(255);
-                        c.drawLine(cx - s * 0.42f, cy - s * 0.42f, cx + s * 0.42f, cy + s * 0.42f, p);
-                    }
-                    break;
-                }
-                case PAD: {
-                    r.set(cx - s * 0.48f, cy - s * 0.26f, cx + s * 0.48f, cy + s * 0.3f);
-                    c.drawRoundRect(r, s * 0.24f, s * 0.24f, p);
-                    float dx = cx - s * 0.22f, dy = cy + s * 0.02f, arm = s * 0.1f;
-                    c.drawLine(dx - arm, dy, dx + arm, dy, p);
-                    c.drawLine(dx, dy - arm, dx, dy + arm, p);
-                    p.setStyle(Paint.Style.FILL);
-                    c.drawCircle(cx + s * 0.18f, cy - s * 0.04f, s * 0.06f, p);
-                    c.drawCircle(cx + s * 0.3f, cy + s * 0.08f, s * 0.06f, p);
-                    break;
-                }
-                case MOON: {
-                    android.graphics.Path moon = new android.graphics.Path();
-                    moon.addCircle(cx, cy, s * 0.4f, android.graphics.Path.Direction.CW);
-                    android.graphics.Path bite = new android.graphics.Path();
-                    bite.addCircle(cx + s * 0.22f, cy - s * 0.18f, s * 0.32f, android.graphics.Path.Direction.CW);
-                    moon.op(bite, android.graphics.Path.Op.DIFFERENCE);
-                    p.setStyle(Paint.Style.FILL);
-                    c.drawPath(moon, p);
-                    break;
-                }
-                default: {
-                    r.set(cx - s * 0.46f, cy - s * 0.34f, cx + s * 0.46f, cy + s * 0.2f);
-                    c.drawRoundRect(r, s * 0.07f, s * 0.07f, p);
-                    c.drawLine(cx - s * 0.2f, cy + s * 0.38f, cx + s * 0.2f, cy + s * 0.38f, p);
-                    break;
-                }
-            }
-            p.setColor(color);
-        }
-
-        @Override public void setAlpha(int alpha) { }
-        @Override public void setColorFilter(ColorFilter cf) { }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
-
-    @Override protected void onResume() {
-        super.onResume();
-        IntentFilter f = new IntentFilter(Intent.ACTION_TIME_TICK);
-        f.addAction(Intent.ACTION_TIME_CHANGED);
-        f.addAction(Intent.ACTION_TIMEZONE_CHANGED);
-        registerReceiver(tick, f);
-        updateClock();
-    }
-
-    @Override protected void onPause() {
-        unregisterReceiver(tick);
-        if (moving != null) endMove();
-        super.onPause();
-    }
-
-    /** Pressing Home while already home jumps back to the first app, like tvOS. */
-    @Override protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        if (moving != null) endMove();
-        if (!entries.isEmpty()) entries.get(0).view.requestFocus();
-    }
-
-    @Override public boolean dispatchKeyEvent(KeyEvent ev) {
-        boolean down = ev.getAction() == KeyEvent.ACTION_DOWN;
-        if (ambient) {
-            // Any key during the hand-off means "never mind".
-            if (down) cancelAmbient();
-            return true;
-        }
-        // Home is the root screen: Back never leaves it, it only drops an app being moved.
-        // (Handled here instead of the deprecated onBackPressed.)
-        if (ev.getKeyCode() == KeyEvent.KEYCODE_BACK) {
-            if (down && moving != null) endMove();
-            return true;
-        }
-        if (moving == null || !down) return super.dispatchKeyEvent(ev);
-        switch (ev.getKeyCode()) {
-            case KeyEvent.KEYCODE_DPAD_LEFT -> moveBy(-1);
-            case KeyEvent.KEYCODE_DPAD_RIGHT -> moveBy(1);
-            case KeyEvent.KEYCODE_DPAD_UP -> moveBy(-COLS);
-            case KeyEvent.KEYCODE_DPAD_DOWN -> moveBy(COLS);
-            case KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> endMove();
-            default -> { }
-        }
-        return true;
+    private void updateClock() {
+        long now = System.currentTimeMillis();
+        clock.setText(DateFormat.format(DateFormat.is24HourFormat(this) ? "HH:mm" : "h:mm", now));
+        String d = DateFormat.format(DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEEdMMMM"), now).toString();
+        date.setText(d.isEmpty() ? d : Character.toUpperCase(d.charAt(0)) + d.substring(1));
     }
 
     // ---- Loading -------------------------------------------------------------------------
 
+    /** One load: the apps that loaded, and the keys of every launchable app, loaded or not. */
+    private static final class Load {
+        final String locales;
+        final List<Entry> apps = new ArrayList<>();
+        final Set<String> keys = new HashSet<>();
+
+        Load(String locales) { this.locales = locales; }
+    }
+
+    /** A tile rendered from the app's own resources, to be written to the cache afterward. */
+    private static final class Fresh {
+        final Entry entry;
+        final Bitmap banner; // CPU copy of the banner; null for the code-drawn Settings tile
+
+        Fresh(Entry entry, Bitmap banner) {
+            this.entry = entry;
+            this.banner = banner;
+        }
+    }
+
     private void reload() {
+        int gen = ++loadGen;
         new Thread(() -> {
-            List<Entry> list = loadEntries();
-            main.post(() -> show(list));
+            List<Fresh> fresh = new ArrayList<>();
+            Load load;
+            try {
+                load = loadEntries(fresh);
+            } catch (Throwable t) {
+                // Keep the grid already on screen: as the home app, dying here would repeat on
+                // every restart and leave the TV with no launcher.
+                Log.w(TAG, "app list load failed", t);
+                return;
+            }
+            // Copied before the entries reach the main thread, which then owns them. Only
+            // reference copies: no IO, no real delay.
+            try {
+                cache.remember(load.apps, load.locales);
+            } catch (RuntimeException | OutOfMemoryError e) {
+                Log.w(TAG, "tile cache remember failed", e);
+            }
+            // Loads can overlap and finish in any order; a superseded one is just dropped.
+            main.post(() -> { if (gen == loadGen) show(load); });
+
+            // File upkeep only once the grid is on its way, so it never delays it.
+            try {
+                for (Fresh f : fresh) {
+                    cache.write(f.entry.key, f.entry.updated, load.locales, f.entry.name, f.banner);
+                }
+                cache.prune(load.keys);
+            } catch (Throwable t) {
+                Log.w(TAG, "tile cache upkeep failed", t);
+            } finally {
+                for (Fresh f : fresh) if (f.banner != null) f.banner.recycle();
+            }
         }, "home-load").start();
     }
 
-    private List<Entry> loadEntries() {
+    /** Off the main thread. An app whose label or banner fails to load is left out, not fatal. */
+    private Load loadEntries(List<Fresh> fresh) {
         PackageManager pm = getPackageManager();
         Intent query = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        int bw = Math.round(tileW * MOVE_SCALE), bh = bw * 9 / 16;
+        int bw = bannerW(), bh = bw * 9 / 16;
 
-        Map<String, Entry> byKey = new LinkedHashMap<>();
+        Load load = new Load(getResources().getConfiguration().getLocales().toLanguageTags());
         for (ResolveInfo ri : pm.queryIntentActivities(query, 0)) {
             ActivityInfo ai = ri.activityInfo;
             if (ai.packageName.equals(getPackageName())) continue;
-            Entry e = new Entry();
-            e.key = ai.packageName + "/" + ai.name;
-            e.name = ri.loadLabel(pm);
-            e.intent = new Intent(Intent.ACTION_MAIN)
-                    .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
-                    .setClassName(ai.packageName, ai.name)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-            Drawable banner = ai.loadBanner(pm);
-            if (e.key.startsWith(SETTINGS_PKG)) bake(e, drawSettings(bw, bh));
-            else bake(e, banner != null ? drawBanner(banner, bw, bh) : drawIcon(ri.loadIcon(pm), bw, bh));
-            byKey.put(e.key, e);
+            load.keys.add(key(ai));
+            try {
+                load.apps.add(loadEntry(pm, ri, bw, bh, load.locales, fresh));
+            } catch (RuntimeException | OutOfMemoryError e) {
+                // OOM included: a huge banner bitmap fails alone, its memory is freed with it.
+                Log.w(TAG, "skipping " + key(ai), e);
+            }
+        }
+        return load;
+    }
+
+    /**
+     * One app's tile: reused from the last load when the package is unchanged, else read from its
+     * cache file, else rendered from the app's own resources (and queued in `fresh` for caching).
+     * Only that last path loads anything from the other app.
+     */
+    private Entry loadEntry(PackageManager pm, ResolveInfo ri, int bw, int bh, String locales, List<Fresh> fresh) {
+        ActivityInfo ai = ri.activityInfo;
+        String key = key(ai);
+        long updated = lastUpdate(pm, ai.packageName);
+        boolean settings = key.startsWith(SETTINGS_PKG);
+        if (updated != 0) {
+            Entry hit = cache.fromMemory(key, updated, locales);
+            if (hit != null) return hit;
         }
 
-        // Saved order first; new apps alphabetically after it, system Settings last.
+        Entry e = new Entry();
+        e.key = key;
+        e.pkg = ai.packageName;
+        e.updated = updated;
+        e.intent = new Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+                .setClassName(ai.packageName, ai.name)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+
+        if (updated != 0) {
+            TileCache.Stored s = cache.read(key, updated, locales);
+            if (s != null) {
+                // Settings is drawn in code; only its label is cached.
+                if (settings && s.banner != null) s.banner.recycle();
+                Bitmap sw = settings ? Banners.drawSettings(bw, bh) : s.banner;
+                if (sw != null) {
+                    e.name = s.name;
+                    Banners.bake(e, sw);
+                    return e;
+                }
+            }
+        }
+
+        e.name = ri.loadLabel(pm);
+        Bitmap sw;
+        if (settings) {
+            sw = Banners.drawSettings(bw, bh);
+        } else {
+            Drawable banner = ai.loadBanner(pm);
+            sw = banner != null ? Banners.drawBanner(banner, bw, bh) : Banners.drawIcon(ri.loadIcon(pm), bw, bh);
+        }
+        // bake moves sw to the GPU and frees it: keep a CPU copy to write the cache file later.
+        Bitmap copy = updated == 0 || settings ? null : sw.copy(Bitmap.Config.ARGB_8888, false);
+        Banners.bake(e, sw);
+        if (updated != 0 && (settings || copy != null)) fresh.add(new Fresh(e, copy));
+        return e;
+    }
+
+    private static String key(ActivityInfo ai) { return ai.packageName + "/" + ai.name; }
+
+    /** The package's lastUpdateTime, or 0 if it can't be read (then the app is never cached). */
+    private static long lastUpdate(PackageManager pm, String pkg) {
+        try {
+            return pm.getPackageInfo(pkg, 0).lastUpdateTime;
+        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /** Banners are rendered at the moving-tile size, the largest a tile is ever drawn. */
+    private int bannerW() { return Math.round(tileW * MOVE_SCALE); }
+
+    /**
+     * Saved order first; new apps alphabetically after it, system Settings last. Runs on the main
+     * thread at show time, so it sees an order saved while the load was still running.
+     */
+    private List<Entry> order(List<Entry> loaded) {
+        Map<String, Entry> byKey = new LinkedHashMap<>();
+        for (Entry e : loaded) byKey.put(e.key, e);
         List<Entry> out = new ArrayList<>();
         for (String k : prefs.getString(PREF_ORDER, "").split("\n")) {
             Entry e = byKey.remove(k);
@@ -712,227 +572,104 @@ public final class HomeActivity extends Activity {
         List<Entry> rest = new ArrayList<>(byKey.values());
         Collator c = Collator.getInstance();
         rest.sort((a, b) -> {
-            boolean sa = a.key.startsWith(SETTINGS_PKG), sb = b.key.startsWith(SETTINGS_PKG);
+            boolean sa = isSettings(a), sb = isSettings(b);
             return sa != sb ? (sa ? 1 : -1) : c.compare(a.name.toString(), b.name.toString());
         });
         out.addAll(rest);
         return out;
     }
 
-    /** Derives the blurred wash, then moves both bitmaps to GPU memory (off the Java heap). */
-    private static void bake(Entry e, Bitmap sw) {
-        Bitmap small = Bitmap.createScaledBitmap(sw, WASH_W, WASH_H, true);
-        int[] px = new int[WASH_W * WASH_H];
-        small.getPixels(px, 0, WASH_W, 0, 0, WASH_W, WASH_H);
-        e.accent = accent(px);
-        for (int pass = 0; pass < 3; pass++) blur(px);
-        tame(px, e.accent);
-        shade(px);
-        small.setPixels(px, 0, WASH_W, 0, 0, WASH_W, WASH_H);
-        e.wash = toGpu(small);
-        e.banner = toGpu(sw);
-    }
-
-    /**
-     * Light banners (white Netflix/YouTube/Play tiles) would wash the screen pale gray: darken them
-     * and lean toward a deep shade of the app's accent so white text keeps its contrast.
-     */
-    private static void tame(int[] px, int accent) {
-        double sum = 0;
-        for (int p : px) sum += 0.299 * ((p >> 16) & 0xFF) + 0.587 * ((p >> 8) & 0xFF) + 0.114 * (p & 0xFF);
-        float luma = (float) (sum / px.length / 255);
-        if (luma <= 0.34f) return;
-        float dim = 0.3f / luma, t = Math.min(1f, (luma - 0.34f) / 0.35f) * 0.65f;
-        float ar = ((accent >> 16) & 0xFF) * 0.32f, ag = ((accent >> 8) & 0xFF) * 0.32f, ab = (accent & 0xFF) * 0.32f;
-        for (int i = 0; i < px.length; i++) {
-            int p = px[i];
-            int r = (int) (((p >> 16) & 0xFF) * dim * (1 - t) + ar * t);
-            int g = (int) (((p >> 8) & 0xFF) * dim * (1 - t) + ag * t);
-            int b = (int) ((p & 0xFF) * dim * (1 - t) + ab * t);
-            px[i] = 0xFF000000 | (r << 16) | (g << 8) | b;
-        }
-    }
-
-    /** Saturation-weighted average color of the banner, pushed bright for the glow; white if it has none. */
-    private static int accent(int[] px) {
-        float[] hsv = new float[3];
-        double r = 0, g = 0, b = 0, sum = 0;
-        for (int p : px) {
-            Color.colorToHSV(p, hsv);
-            if (hsv[2] < 0.15f) continue;
-            float w = hsv[1] * hsv[1] * hsv[2];
-            r += ((p >> 16) & 0xFF) * w;
-            g += ((p >> 8) & 0xFF) * w;
-            b += (p & 0xFF) * w;
-            sum += w;
-        }
-        if (sum < px.length * 0.02) return Color.WHITE;
-        Color.colorToHSV(Color.rgb((int) (r / sum), (int) (g / sum), (int) (b / sum)), hsv);
-        hsv[1] = Math.max(hsv[1], 0.55f);
-        hsv[2] = 1f;
-        return Color.HSVToColor(hsv);
-    }
-
-    private static Bitmap toGpu(Bitmap b) {
-        Bitmap hw = b.copy(Bitmap.Config.HARDWARE, false);
-        if (hw == null) return b;
-        b.recycle();
-        return hw;
-    }
-
-    private static Bitmap drawBanner(Drawable d, int w, int h) {
-        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(b);
-        c.drawColor(0xFF2A2A31);
-        d.setBounds(0, 0, w, h);
-        d.draw(c);
-        return b;
-    }
-
-    private static Bitmap drawIcon(Drawable icon, int w, int h) {
-        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(b);
-        c.drawColor(0xFF2A2A31);
-        int s = h * 6 / 10;
-        icon.setBounds((w - s) / 2, (h - s) / 2, (w + s) / 2, (h + s) / 2);
-        icon.draw(c);
-        return b;
-    }
-
-    /**
-     * Frosted rounded panel, rendered once and only translated afterward. The glow is a separate
-     * white mask so it can be tinted per app with a color filter instead of being re-rasterized.
-     */
-    private Bitmap drawRowPanel(boolean glowOnly) {
-        int glow = dp(ROW_GLOW);
-        int w = panelW, h = panelH;
-        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(b);
-        android.graphics.RectF r = new android.graphics.RectF(glow, glow, w - glow, h - glow);
-        float rad = dp(ROW_RADIUS);
-
-        if (glowOnly) {
-            Paint halo = new Paint(Paint.ANTI_ALIAS_FLAG);
-            halo.setColor(0x80FFFFFF);
-            halo.setMaskFilter(new android.graphics.BlurMaskFilter(glow * 0.8f, android.graphics.BlurMaskFilter.Blur.OUTER));
-            c.drawRoundRect(r, rad, rad, halo);
-            return toGpu(b);
-        }
-
-        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        fill.setShader(new LinearGradient(0, r.top, 0, r.bottom, 0x24FFFFFF, 0x12FFFFFF, Shader.TileMode.CLAMP));
-        c.drawRoundRect(r, rad, rad, fill);
-
-        Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
-        edge.setStyle(Paint.Style.STROKE);
-        edge.setStrokeWidth(dp(1));
-        edge.setColor(0x47FFFFFF);
-        r.inset(dp(0.5f), dp(0.5f));
-        c.drawRoundRect(r, rad, rad, edge);
-        return toGpu(b);
-    }
-
-    /** Graphite tile with a white gear, in place of the stock gray Settings banner. */
-    private static Bitmap drawSettings(int w, int h) {
-        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(b);
-        Paint bg = new Paint();
-        bg.setShader(new LinearGradient(0, 0, 0, h, 0xFF6A6F7C, 0xFF24272E, Shader.TileMode.CLAMP));
-        c.drawRect(0, 0, w, h, bg);
-
-        float cx = w / 2f, cy = h / 2f, r = h * 0.29f;
-        Paint shadow = new Paint(Paint.ANTI_ALIAS_FLAG);
-        shadow.setColor(0x40000000);
-        Paint gear = new Paint(Paint.ANTI_ALIAS_FLAG);
-        gear.setShader(new LinearGradient(0, cy - r, 0, cy + r, 0xFFFFFFFF, 0xFFD9DBE2, Shader.TileMode.CLAMP));
-        for (Paint p : new Paint[] {shadow, gear}) {
-            float dy = p == shadow ? h * 0.02f : 0;
-            for (int i = 0; i < 12; i++) {
-                c.save();
-                c.rotate(i * 30, cx, cy + dy);
-                c.drawRoundRect(cx - r * 0.12f, cy + dy - r * 1.1f, cx + r * 0.12f, cy + dy - r * 0.7f, r * 0.05f, r * 0.05f, p);
-                c.restore();
-            }
-            c.drawCircle(cx, cy + dy, r * 0.9f, p);
-        }
-        Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG);
-        ring.setStyle(Paint.Style.STROKE);
-        ring.setStrokeWidth(r * 0.06f);
-        ring.setColor(0xFF9EA2AD);
-        c.drawCircle(cx, cy, r * 0.66f, ring);
-        c.drawCircle(cx, cy, r * 0.3f, bg);
-        return b;
-    }
-
-    /** Bakes the top-to-bottom darkening and an edge vignette into the wash (no per-frame overlay). */
-    private static void shade(int[] px) {
-        final int w = WASH_W, h = WASH_H;
-        for (int y = 0; y < h; y++) {
-            float t = y / (float) (h - 1);
-            float keep = t < 0.5f ? 0.82f - 0.3f * t : 0.67f - (t - 0.5f);
-            float dy = t * 2 - 1;
-            for (int x = 0; x < w; x++) {
-                float dx = x / (float) (w - 1) * 2 - 1;
-                float k = keep * Math.max(0f, 1f - 0.42f * (dx * dx * 0.7f + dy * dy * 0.5f));
-                int p = px[y * w + x];
-                int r = (int) (((p >> 16) & 0xFF) * k), g = (int) (((p >> 8) & 0xFF) * k), b = (int) ((p & 0xFF) * k);
-                px[y * w + x] = 0xFF000000 | (r << 16) | (g << 8) | b;
-            }
-        }
-    }
-
-    /** One horizontal + vertical box-blur pass (radius 5) over the wash's packed ARGB pixels. */
-    private static void blur(int[] px) {
-        final int r = 5;
-        int[] tmp = new int[px.length];
-        boxPass(px, tmp, WASH_W, WASH_H, r, 1, WASH_W);
-        boxPass(tmp, px, WASH_H, WASH_W, r, WASH_W, 1);
-    }
-
-    private static void boxPass(int[] src, int[] dst, int len, int lines, int r, int step, int lineStep) {
-        for (int line = 0; line < lines; line++) {
-            int base = line * lineStep;
-            for (int i = 0; i < len; i++) {
-                int rs = 0, gs = 0, bs = 0, n = 0;
-                for (int k = Math.max(0, i - r); k <= Math.min(len - 1, i + r); k++) {
-                    int p = src[base + k * step];
-                    rs += (p >> 16) & 0xFF;
-                    gs += (p >> 8) & 0xFF;
-                    bs += p & 0xFF;
-                    n++;
-                }
-                dst[base + i * step] = 0xFF000000 | ((rs / n) << 16) | ((gs / n) << 8) | (bs / n);
-            }
-        }
-    }
+    private static boolean isSettings(Entry e) { return e.key.startsWith(SETTINGS_PKG); }
 
     // ---- Grid ----------------------------------------------------------------------------
 
-    private void show(List<Entry> list) {
+    /**
+     * Puts a load on screen (a fresh one, or the current one again after hiding or un-hiding an
+     * app, in which case Entry objects are reused with new views). New tiles go in before the old
+     * ones come out, so the focused view is never removed (that would bounce focus to a shortcut
+     * pill). On a reload the row, title, label, wash and scroll stay as they were, and so does focus.
+     */
+    private void show(Load load) {
         if (isDestroyed()) return;
-        String keep = focused != null ? focused.key : null;
-        grid.removeAllViews();
+        if (load.apps.isEmpty() && !entries.isEmpty()) {
+            // Every app failed to load (Settings alone always exists): keep the grid we have.
+            Log.w(TAG, "load returned no apps; keeping the current grid");
+            return;
+        }
+        // The menu's actions hold Entry objects of the grid being replaced.
+        menu.close();
+        // The new grid has new Entry objects, so a move in progress can't carry over: drop the
+        // tile where the user has it now. endMove saves that order, which order() then reads.
+        if (moving != null) endMove();
+        lastLoad = load;
+
+        Set<String> hidden = hiddenKeys();
+        if (hidden.retainAll(load.keys)) saveHidden(hidden); // forget uninstalled apps
+        List<Entry> visible = new ArrayList<>();
+        for (Entry e : load.apps) if (!hidden.contains(e.key)) visible.add(e);
+        // Never lock the user out: with nothing left to show, show the hidden apps too.
+        if (visible.isEmpty()) visible.addAll(load.apps);
+        List<Entry> list = order(visible);
+
+        // Captured before the loop: reused entries get a new view in it.
+        List<Entry> old = new ArrayList<>(entries);
+        List<View> oldViews = new ArrayList<>();
+        for (Entry e : old) oldViews.add(e.view);
+        Entry was = focused;
+        View wasView = was != null ? was.view : null;
+        View current = getCurrentFocus();
+
         entries.clear();
         entries.addAll(list);
-        focused = null;
-        focusedRow = -1;
-
-        // Behind the tiles: first child of the grid, so it scrolls with the rows.
-        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(panelW, panelH);
-        pl.leftMargin = dp(SIDE) - dp(ROW_PAD_X) - dp(ROW_GLOW);
-        grid.addView(rowPanel, pl);
-        rowPanel.setAlpha(0f);
-
-        Entry target = list.isEmpty() ? null : list.get(0);
+        Entry target = null;
         for (int i = 0; i < list.size(); i++) {
             Entry e = list.get(i);
             e.view = tile(e);
             grid.addView(e.view, new FrameLayout.LayoutParams(tileW, tileH));
             place(e, i, false);
-            if (e.key.equals(keep)) target = e;
+            if (was != null && e.key.equals(was.key)) target = e;
         }
-        grid.addView(label, new FrameLayout.LayoutParams(Math.round(tileW * 1.5f), FrameLayout.LayoutParams.WRAP_CONTENT));
-        if (target != null) target.view.requestFocus();
+        label.bringToFront();
+
+        if (was == null) {
+            // First load: start on the first app, with the usual focus animation.
+            if (!list.isEmpty()) list.get(0).view.requestFocus();
+        } else {
+            boolean same = target != null;
+            // The app is gone (uninstalled or hidden): use whichever app took its place.
+            if (!same) target = list.get(Math.min(Math.max(old.indexOf(was), 0), list.size() - 1));
+            if (current != null && current != wasView) {
+                // Focus is on a shortcut pill: leave it there, keep the backdrop on the app. The
+                // pills hide when the grid scrolls past the shelf, so stay on the shelf.
+                if (entries.indexOf(target) / COLS > 1) target = list.get(0);
+                restore(target);
+            } else if (same && current != null) {
+                // Carry the focused look over to the new tile instead of replaying it.
+                target.view.setScaleX(FOCUS_SCALE);
+                target.view.setScaleY(FOCUS_SCALE);
+                target.view.setTranslationZ(dp(16));
+                restoring = true;
+                try {
+                    target.view.requestFocus();
+                } finally {
+                    restoring = false;
+                }
+                restore(target);
+            } else {
+                target.view.requestFocus();
+            }
+        }
+        for (View v : oldViews) grid.removeView(v);
+    }
+
+    /** Points label, title, wash and row panel at e without the focus effects (after a reload). */
+    private void restore(Entry e) {
+        focused = e;
+        int i = entries.indexOf(e);
+        label.setText(e.name);
+        placeLabel(i);
+        setWash(e);
+        scrollTo(i / COLS);
     }
 
     private ImageView tile(Entry e) {
@@ -944,8 +681,8 @@ public final class HomeActivity extends Activity {
         v.setClipToOutline(true);
         v.setContentDescription(e.name);
         v.setOnClickListener(x -> launch(e));
-        v.setOnLongClickListener(x -> { startMove(e); return true; });
-        v.setOnFocusChangeListener((x, has) -> onTileFocus(e, has));
+        v.setOnLongClickListener(x -> { openMenu(e); return true; });
+        v.setOnFocusChangeListener((x, has) -> onTileFocus(e, x, has));
         return v;
     }
 
@@ -969,15 +706,16 @@ public final class HomeActivity extends Activity {
         e.view.setLayoutParams(lp);
     }
 
-    private void onTileFocus(Entry e, boolean has) {
+    /** v, not e.view: when show() reuses an Entry, its old view loses focus after e.view is replaced. */
+    private void onTileFocus(Entry e, View v, boolean has) {
         float s = has ? (e == moving ? MOVE_SCALE : FOCUS_SCALE) : 1f;
-        e.view.animate().scaleX(s).scaleY(s).translationZ(has ? dp(16) : 0)
+        v.animate().scaleX(s).scaleY(s).translationZ(has ? dp(16) : 0)
                 .setDuration(170).setInterpolator(ease).start();
-        // One shared shine, attached only to the focused tile so idle tiles cost nothing.
-        e.view.setForeground(has ? shine : null);
+        v.setForeground(has ? shine : null);
         if (!has) return;
-        shine.sweep();
         focused = e;
+        if (restoring) return; // show() puts the rest back as it was, without the effects
+        shine.sweep();
         int i = entries.indexOf(e);
         showLabel(e, i);
         setWash(e);
@@ -986,10 +724,14 @@ public final class HomeActivity extends Activity {
 
     private void showLabel(Entry e, int i) {
         label.setText(e.name);
-        label.setX(tileX(i) - tileW * 0.25f);
-        label.setY(tileY(i) + tileH * (1 + (MOVE_SCALE - 1) / 2) + dp(6));
+        placeLabel(i);
         label.setAlpha(0f);
         label.animate().alpha(1f).setDuration(200).start();
+    }
+
+    private void placeLabel(int i) {
+        label.setX(tileX(i) - tileW * 0.25f);
+        label.setY(tileY(i) + tileH * (1 + (MOVE_SCALE - 1) / 2) + dp(6));
     }
 
     /** The first two rows fit under the shelf; deeper rows scroll up into the second row's slot. */
@@ -1033,7 +775,7 @@ public final class HomeActivity extends Activity {
     }
 
     private void launch(Entry e) {
-        if (moving != null) return;
+        if (moving != null || menu.isOpen()) return;
         try {
             startActivity(e.intent);
         } catch (RuntimeException ignored) {
@@ -1041,9 +783,43 @@ public final class HomeActivity extends Activity {
         }
     }
 
+    /**
+     * Frosted rounded panel, rendered once and only translated afterward. The glow is a separate
+     * white mask so it can be tinted per app with a color filter instead of being re-rasterized.
+     */
+    private Bitmap drawRowPanel(boolean glowOnly) {
+        int glow = dp(ROW_GLOW);
+        int w = panelW, h = panelH;
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(b);
+        RectF r = new RectF(glow, glow, w - glow, h - glow);
+        float rad = dp(ROW_RADIUS);
+
+        if (glowOnly) {
+            Paint halo = new Paint(Paint.ANTI_ALIAS_FLAG);
+            halo.setColor(0x80FFFFFF);
+            halo.setMaskFilter(new BlurMaskFilter(glow * 0.8f, BlurMaskFilter.Blur.OUTER));
+            c.drawRoundRect(r, rad, rad, halo);
+            return Banners.toGpu(b);
+        }
+
+        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        fill.setShader(new LinearGradient(0, r.top, 0, r.bottom, 0x24FFFFFF, 0x12FFFFFF, Shader.TileMode.CLAMP));
+        c.drawRoundRect(r, rad, rad, fill);
+
+        Paint edge = new Paint(Paint.ANTI_ALIAS_FLAG);
+        edge.setStyle(Paint.Style.STROKE);
+        edge.setStrokeWidth(dp(1));
+        edge.setColor(0x47FFFFFF);
+        r.inset(dp(0.5f), dp(0.5f));
+        c.drawRoundRect(r, rad, rad, edge);
+        return Banners.toGpu(b);
+    }
+
     // ---- Reordering ----------------------------------------------------------------------
 
     private void startMove(Entry e) {
+        if (moving != null || !entries.contains(e)) return; // stale menu action: tile is gone
         moving = e;
         e.view.animate().scaleX(MOVE_SCALE).scaleY(MOVE_SCALE).setDuration(150).start();
         e.view.setAlpha(0.85f);
@@ -1052,7 +828,7 @@ public final class HomeActivity extends Activity {
 
     private void moveBy(int d) {
         int i = entries.indexOf(moving), j = i + d;
-        if (j < 0 || j >= entries.size()) return;
+        if (i < 0 || j < 0 || j >= entries.size()) return; // i < 0: stale tile, never remove(-1)
         entries.remove(i);
         entries.add(j, moving);
         for (int k = Math.min(i, j); k <= Math.max(i, j); k++) place(entries.get(k), k, true);
@@ -1074,14 +850,65 @@ public final class HomeActivity extends Activity {
         prefs.edit().putString(PREF_ORDER, sb.toString()).apply();
     }
 
-    // ---- Helpers -------------------------------------------------------------------------
+    // ---- Long-press menu -----------------------------------------------------------------
 
-    private void updateClock() {
-        long now = System.currentTimeMillis();
-        clock.setText(DateFormat.format(DateFormat.is24HourFormat(this) ? "HH:mm" : "h:mm", now));
-        String d = DateFormat.format(DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "EEEEdMMMM"), now).toString();
-        date.setText(d.isEmpty() ? d : Character.toUpperCase(d.charAt(0)) + d.substring(1));
+    private void openMenu(Entry e) {
+        if (moving != null || !entries.contains(e)) return;
+        List<TileMenu.Item> items = new ArrayList<>();
+        items.add(new TileMenu.Item("Mover", () -> startMove(e)));
+        // Settings can't be hidden: it's the way back to everything else.
+        if (!isSettings(e)) items.add(new TileMenu.Item("Ocultar", () -> setHidden(e.key, true)));
+        items.add(new TileMenu.Item("Informações do app", () -> openAppInfo(e)));
+        List<Entry> hiddenApps = hiddenApps();
+        if (!hiddenApps.isEmpty()) {
+            items.add(new TileMenu.Item("Apps ocultos (" + hiddenApps.size() + ")", () -> openHiddenMenu(hiddenApps)));
+        }
+        menu.open(e.name, items);
     }
+
+    private void openHiddenMenu(List<Entry> apps) {
+        List<TileMenu.Item> items = new ArrayList<>();
+        for (Entry h : apps) items.add(new TileMenu.Item(h.name.toString(), () -> setHidden(h.key, false)));
+        menu.open("Apps ocultos", items);
+    }
+
+    /** Hidden apps that are installed and loaded, by name. */
+    private List<Entry> hiddenApps() {
+        List<Entry> out = new ArrayList<>();
+        if (lastLoad == null) return out;
+        Set<String> hidden = hiddenKeys();
+        for (Entry e : lastLoad.apps) if (hidden.contains(e.key)) out.add(e);
+        Collator c = Collator.getInstance();
+        out.sort((a, b) -> c.compare(a.name.toString(), b.name.toString()));
+        return out;
+    }
+
+    /** Re-shows the current load: no reload needed, every app (hidden ones too) is in it. */
+    private void setHidden(String key, boolean hide) {
+        Set<String> hidden = hiddenKeys();
+        if (!(hide ? hidden.add(key) : hidden.remove(key))) return;
+        saveHidden(hidden);
+        if (lastLoad != null) show(lastLoad);
+    }
+
+    private Set<String> hiddenKeys() {
+        Set<String> s = new HashSet<>();
+        for (String k : prefs.getString(PREF_HIDDEN, "").split("\n")) if (!k.isEmpty()) s.add(k);
+        return s;
+    }
+
+    private void saveHidden(Set<String> s) {
+        prefs.edit().putString(PREF_HIDDEN, String.join("\n", s)).apply();
+    }
+
+    private void openAppInfo(Entry e) {
+        try {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + e.pkg))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+        } catch (RuntimeException ignored) { }
+    }
+
+    // ---- Helpers -------------------------------------------------------------------------
 
     private ImageView washView() {
         ImageView v = new ImageView(this);
@@ -1097,13 +924,6 @@ public final class HomeActivity extends Activity {
         t.setShadowLayer(dp(6), 0, dp(1), 0x99000000);
         t.setFocusable(false);
         return t;
-    }
-
-    private static LinearLayout.LayoutParams centered(int w, int h, int top) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(w, h);
-        lp.gravity = Gravity.CENTER_HORIZONTAL;
-        lp.topMargin = top;
-        return lp;
     }
 
     private static FrameLayout.LayoutParams fill() {

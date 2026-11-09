@@ -1,12 +1,13 @@
-# Scans 192.168.0.0/24 until a Chromecast (cast port 8009) answers, then reports its IP and adb state.
+# Scans the /24 of the TV's IP (192.168.0.x by default, see comum.ps1) until a Chromecast (cast port 8009) answers, then reports its IP and adb state.
 param([int]$Minutes = 30)
-$adb = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
+. "$PSScriptRoot\comum.ps1"
+$prefix = $TvIp -replace '\.\d+$', ''
 $deadline = (Get-Date).AddMinutes($Minutes)
 while ((Get-Date) -lt $deadline) {
     $tasks = @{}
     foreach ($i in 2..254) {
         $c = New-Object Net.Sockets.TcpClient
-        $tasks["192.168.0.$i"] = @($c, $c.ConnectAsync("192.168.0.$i", 8009))
+        $tasks["$prefix.$i"] = @($c, $c.ConnectAsync("$prefix.$i", 8009))
     }
     Start-Sleep -Milliseconds 2500
     $found = @()

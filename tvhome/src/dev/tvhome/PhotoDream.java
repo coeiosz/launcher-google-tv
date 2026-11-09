@@ -175,19 +175,38 @@ public final class PhotoDream extends DreamService {
     /** Decodes the next photo off the main thread, then crossfades it in. */
     private void loadNext() {
         if (!running || photos.isEmpty()) return;
-        File f = photos.get(next++ % photos.size());
+        if (next >= photos.size()) reshuffle();
+        File f = photos.get(next++);
         new Thread(() -> {
             Bitmap b = decode(this, f);
             main.post(() -> {
                 if (!running) return;
                 if (b == null) {
-                    photos.remove(f);
+                    // Unreadable: drop it, keeping `next` on the photo that followed it.
+                    int at = photos.indexOf(f);
+                    if (at >= 0) {
+                        photos.remove(at);
+                        if (at < next) next--;
+                    }
                     loadNext();
                 } else {
                     present(b);
                 }
             });
         }, "dream-decode").start();
+    }
+
+    /**
+     * A new order for each pass, so the slideshow doesn't repeat itself. The last photo of the
+     * pass just ended is the one on screen; it must not open the next pass too.
+     */
+    private void reshuffle() {
+        File last = photos.get(photos.size() - 1);
+        Collections.shuffle(photos, random);
+        if (photos.size() > 1 && photos.get(0).equals(last)) {
+            Collections.swap(photos, 0, 1 + random.nextInt(photos.size() - 1));
+        }
+        next = 0;
     }
 
     static Bitmap decode(Context c, File f) {

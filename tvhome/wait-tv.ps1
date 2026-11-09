@@ -1,10 +1,12 @@
 # Waits until the TV is reachable again, then reports which services are up (adb, Wi-Fi remote).
-param([int]$Minutes = 20)
-$adb = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
+# -Ip defaults to the TV's address from comum.ps1 ($env:TVHOME_IP, else 192.168.0.126).
+param([int]$Minutes = 20, [string]$Ip = "")
+. "$PSScriptRoot\comum.ps1"
+if (-not $Ip) { $Ip = $TvIp }   # not a param default: $TvIp only exists after the dot-source above
 $deadline = (Get-Date).AddMinutes($Minutes)
 while ((Get-Date) -lt $deadline) {
     $c = New-Object Net.Sockets.TcpClient
-    $up = $c.ConnectAsync("192.168.0.126", 6466).Wait(1500) -and $c.Connected
+    $up = $c.ConnectAsync($Ip, 6466).Wait(1500) -and $c.Connected
     $c.Dispose()
     if ($up) {
         Start-Sleep 5

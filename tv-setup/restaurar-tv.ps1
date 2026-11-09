@@ -2,9 +2,10 @@
 # Uso: .\restaurar-tv.ps1            -> reativa tudo
 #      .\restaurar-tv.ps1 katniss     -> reativa só os pacotes que contêm "katniss"
 # Antes: parear/conectar a TV (adb connect IP:PORTA da Depuração sem fio).
-param([string]$Filtro = "", [string]$Tv = "192.168.0.126:38227")
-
-$adb = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
+# Sem -Tv, usa a TV que o adb tem conectada.
+param([string]$Filtro = "", [string]$Tv = "")
+. "$PSScriptRoot\..\tvhome\comum.ps1"
+$Tv = Get-Tv $Tv
 $pacotes = @(
   "com.google.android.apps.education.cast2class",
   "com.google.android.play.games",

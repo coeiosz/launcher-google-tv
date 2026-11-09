@@ -1,6 +1,7 @@
 # Waits for the TV's wireless-debugging service, reconnects and re-enables the stock launcher.
+# Recovery path: the shell chain uses ";" on purpose so every step is attempted even if one fails.
 param([int]$Minutes = 30)
-$adb = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\platform-tools\adb.exe"
+. "$PSScriptRoot\comum.ps1"
 $deadline = (Get-Date).AddMinutes($Minutes)
 while ((Get-Date) -lt $deadline) {
     $svc = & $adb mdns services | Select-String "_adb-tls-connect\._tcp\s+(\S+)"

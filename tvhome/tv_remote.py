@@ -10,7 +10,7 @@ import time
 
 from androidtvremote2 import AndroidTVRemote
 
-HOST = "192.168.0.126"
+HOST = os.environ.get("TVHOME_IP", "192.168.0.126")
 STATE = os.path.join(os.environ["TEMP"], "atvr")
 CERT, KEY, CODE = (os.path.join(STATE, n) for n in ("cert.pem", "key.pem", "code.txt"))
 
