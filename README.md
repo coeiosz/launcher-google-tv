@@ -50,18 +50,16 @@ adb shell pm grant dev.tvhome android.permission.BLUETOOTH_CONNECT   # atalho Pa
 
 ### Tornar tela inicial (e desfazer)
 
-> **Atenção: esta configuração pode travar a Chromecast.** Com o `launcherx` desativado e o `setupwraith` ativo, o Android às vezes abre a `RecoveryActivity` do `setupwraith` como tela inicial; ela se fecha na hora e é reaberta dezenas de vezes por segundo, até o `system_server` cair (`NullPointerException` em `Task.moveTaskToBackInner`). Depois de algumas quedas o Android mostra a tela "Android Recovery" ("Can't load Android system"). Aconteceu em 31/10/2026 e 09/11/2026. Até haver solução, o mais seguro é manter a tela do Google como inicial e abrir o launcher pela fileira de apps ("Início"). Se a TV ficar em tela preta sem o adb, dá para reativar o `launcherx` pelo `tv_remote.py`: `keys "link:market://details?id=com.google.android.apps.tv.launcherx"`, tocar em **Ativar** e depois `keys HOME`.
+A tela do Google (`launcherx`) continua sendo a tela inicial oficial e nada do sistema é desativado. O serviço de acessibilidade **Início como tela inicial** (`HomeGuard`) abre o launcher sempre que a tela do Google aparece: ao apertar Home, ao acordar de um standby longo e ao ligar a TV. Ela pode aparecer por uma fração de segundo antes.
 
 ```powershell
-adb shell pm disable-user --user 0 com.google.android.tungsten.setupwraith
-adb shell cmd package set-home-activity dev.tvhome/.HomeActivity
-adb shell pm disable-user --user 0 com.google.android.apps.tv.launcherx
-adb shell pm enable com.google.android.tungsten.setupwraith      # necessário para o Cast (veja abaixo)
+adb shell settings put secure enabled_accessibility_services dev.tvhome/dev.tvhome.HomeGuard
+adb shell settings put secure accessibility_enabled 1
 ```
 
-Para voltar à tela do Google: `tvhome\revert-home.ps1`.
+Para desfazer: `adb shell settings delete secure enabled_accessibility_services`, ou desative em Configurações > Sistema > Acessibilidade.
 
-> Desativar o `launcherx` com o `setupwraith` ativo e sem o `dev.tvhome` fixado faz a TV entrar em loop na tela de recuperação do Google (tela preta). Por isso a ordem acima: desativa o `setupwraith`, fixa o `dev.tvhome` (preferido para HOME com `mAlways=true`), desativa o `launcherx` e só então reativa o `setupwraith`. Com isso, ao apertar Home a `RecoveryActivity` abre por um instante, registra `LauncherX HomeActivity not found on device. Skipping enable.` e fecha, caindo no `dev.tvhome`.
+> **Não desative o `launcherx`.** O método antigo (desativar o `launcherx` e fixar o `dev.tvhome` como HOME) faz o Android às vezes abrir a `RecoveryActivity` do `setupwraith` como tela inicial; ela se fecha na hora e é reaberta dezenas de vezes por segundo, até o `system_server` cair (`NullPointerException` em `Task.moveTaskToBackInner`). Depois de algumas quedas o Android mostra a tela "Android Recovery" ("Can't load Android system"). Aconteceu em 31/10/2026 e 09/11/2026. Com o `launcherx` ativo, o Android sempre prefere ele para HOME, mesmo com o `dev.tvhome` fixado; por isso o serviço acima. Se a TV ficar em tela preta sem o adb, dá para reativar o `launcherx` pelo `tv_remote.py`: `keys "link:market://details?id=com.google.android.apps.tv.launcherx"`, tocar em **Ativar** e depois `keys HOME`. Com adb: `tvhome\revert-home.ps1`.
 
 > **O `setupwraith` precisa ficar ativo para o Cast e o Google Home.** Ele guarda o `CastInfoProvider`, de onde o Cast (`mediashell`) carrega a credencial do aparelho. Sem ele o log mostra `Cannot get device credentials` / `No private key, hence empty signature`, o celular recusa a conexão e o Google Home mostra a Chromecast como desconectada. Para o Cast recarregar a credencial sem reiniciar a TV:
 >
@@ -71,7 +69,7 @@ Para voltar à tela do Google: `tvhome\revert-home.ps1`.
 >
 > O log deve mostrar `Imported client auth private key`.
 
-> Efeito colateral: as configurações do modo ambiente do Google dependem do `launcherx`; com ele desativado o modo ambiente do Google não é configurável. Por isso o launcher traz o próprio protetor de tela (abaixo); `ambiente-config.ps1 -Start`/`-End` continua disponível para mexer no do Google.
+> Com o `launcherx` ativo, o modo ambiente do Google volta a ser configurável normalmente. O `ambiente-config.ps1` só fazia sentido no método antigo: **não rode o `-End`**, ele desativa o `launcherx` de novo.
 
 ## Protetor de tela com suas fotos
 
@@ -104,7 +102,7 @@ Invoke-WebRequest https://github.com/opencv/opencv_zoo/raw/main/models/face_dete
 | `tvhome/rescue.ps1` | Espera a depuração voltar e reativa a tela do Google |
 | `tvhome/revert-home.ps1` | Restaura a tela inicial do Google |
 | `tvhome/fotos-sync.ps1` | Prepara e envia as fotos de `fotos/` para o protetor de tela |
-| `tvhome/ambiente-config.ps1` | `-Start`/`-End`: reativa temporariamente `setupwraith` e `launcherx` para ajustar o modo ambiente e atualizar as fotos da conta (não aperte Home enquanto estiver ativo). O `-End` confere se o `dev.tvhome` está instalado e virou a tela inicial de fato; se algo falhar, reativa o `launcherx` do Google em vez de deixar a TV em tela preta |
+| `tvhome/ambiente-config.ps1` | Só para o método antigo de tela inicial (com o `launcherx` desativado); hoje não é necessário. **Não rode o `-End`**: ele desativa o `launcherx` |
 | `tv-setup/restaurar-tv.ps1` | Reativa os apps desativados no debloat |
 
 ## Solução de problemas

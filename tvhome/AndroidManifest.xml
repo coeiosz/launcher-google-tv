@@ -53,6 +53,21 @@
             </intent-filter>
         </activity>
 
+        <!-- Brings the launcher up whenever Google's home appears, so Google's launcher can stay the
+             real HOME (see HomeGuard). Enabled over adb: settings put secure enabled_accessibility_services. -->
+        <service
+            android:name=".HomeGuard"
+            android:exported="true"
+            android:label="@string/home_guard_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/home_guard" />
+        </service>
+
         <!-- Own screensaver with the user's photos; no dependency on Google's disabled apps. -->
         <service
             android:name=".PhotoDream"

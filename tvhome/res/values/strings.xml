@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="home_guard_label">Início como tela inicial</string>
+    <string name="home_guard_description">Abre o Início sempre que a tela inicial do Google aparecer (botão Home ou ao ligar a TV). Não lê o conteúdo da tela.</string>
+</resources>
