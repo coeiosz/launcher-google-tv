@@ -182,6 +182,10 @@ public final class HomeActivity extends Activity {
         }
         rowPanel.setFocusable(false);
         rowPanel.setAlpha(0f);
+        // Every focus change redraws the grid, and with it this panel: cache glow + glass in one GPU
+        // texture so the glass shader only reruns when the panel itself changes (row, wash, tint).
+        // The slide and the alpha pulse are applied to the cached texture for free.
+        rowPanel.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         // Behind the tiles: first child of the grid, so it scrolls with the rows.
         FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(panelW, panelH);
         pl.leftMargin = dp(SIDE) - dp(ROW_PAD_X) - dp(ROW_GLOW);
