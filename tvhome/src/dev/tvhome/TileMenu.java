@@ -33,35 +33,47 @@ final class TileMenu {
     private static final int MAX_ROWS = 8, FADE_MS = 150;
     // Same colors as a focused shortcut pill.
     private static final int SELECTED_BG = 0xF2FFFFFF, SELECTED_FG = 0xFF15161A;
+    // The scrim's black at 60% leaves 40% of what is behind it.
+    private static final int SCRIM = 0x99000000;
+    private static final float BEHIND = 0.4f;
 
     private final float density;
     private final FrameLayout layer;
     private final TextView header;
     private final TextView[] rows = new TextView[MAX_ROWS];
     private final GradientDrawable[] rowBgs = new GradientDrawable[MAX_ROWS];
+    private final Glass.Surface[] rowGlass = new Glass.Surface[MAX_ROWS];
     private final List<Item> items = new ArrayList<>();
     private int selected, first;
     private boolean open;
 
     /** Adds the (hidden) menu on top of everything already in root. */
-    TileMenu(Context c, FrameLayout root) {
+    TileMenu(Context c, FrameLayout root, Glass glass) {
         density = c.getResources().getDisplayMetrics().density;
 
         // Full-screen scrim, so the panel reads over the tiles and the wash.
         layer = new FrameLayout(c);
-        layer.setBackgroundColor(0x99000000);
+        layer.setBackgroundColor(SCRIM);
         layer.setFocusable(false);
 
         LinearLayout panel = new LinearLayout(c);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(8), dp(8), dp(8), dp(8));
         panel.setMinimumWidth(dp(260));
-        // Frosted like the row panel: translucent white fill, 1dp light edge.
-        GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[] {0x24FFFFFF, 0x12FFFFFF});
-        bg.setCornerRadius(dp(24));
-        bg.setStroke(dp(1), 0x47FFFFFF);
-        panel.setBackground(bg);
+        if (glass.enabled()) {
+            // Thick frosted glass: the tiles behind can't be sampled, and through this much frost
+            // they would only be a smear of color anyway. So it is opaque, drawn from the wash
+            // under the same scrim as its surroundings, a little lighter than them.
+            panel.setBackground(glass.surface(panel, new Glass.Style().radius(24).bevel(16).refract(14)
+                    .frost(0.1f).shine(0.7f).base(BEHIND, 0f).opaque()));
+        } else {
+            // Frosted like the row panel: translucent white fill, 1dp light edge.
+            GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                    new int[] {0x24FFFFFF, 0x12FFFFFF});
+            bg.setCornerRadius(dp(24));
+            bg.setStroke(dp(1), 0x47FFFFFF);
+            panel.setBackground(bg);
+        }
 
         header = text(c, 14);
         header.setAlpha(0.7f);
@@ -72,11 +84,19 @@ final class TileMenu {
         for (int i = 0; i < MAX_ROWS; i++) {
             TextView t = text(c, 15);
             t.setPadding(dp(16), dp(9), dp(16), dp(9));
-            GradientDrawable rb = new GradientDrawable();
-            rb.setCornerRadius(dp(18));
-            t.setBackground(rb);
+            if (glass.enabled()) {
+                // The selected row is lit glass over the menu's glass (what it bends at its rim).
+                Glass.Surface g = glass.surface(t, new Glass.Style().radius(18).bevel(9).refract(6)
+                        .shine(0.8f).base(BEHIND, 0.07f).hideIdle());
+                t.setBackground(g);
+                rowGlass[i] = g;
+            } else {
+                GradientDrawable rb = new GradientDrawable();
+                rb.setCornerRadius(dp(18));
+                t.setBackground(rb);
+                rowBgs[i] = rb;
+            }
             rows[i] = t;
-            rowBgs[i] = rb;
             panel.addView(t, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT));
         }
@@ -143,7 +163,8 @@ final class TileMenu {
             t.setVisibility(View.VISIBLE);
             t.setText(items.get(i).text);
             t.setTextColor(sel ? SELECTED_FG : Color.WHITE);
-            rowBgs[r].setColor(sel ? SELECTED_BG : Color.TRANSPARENT);
+            if (rowGlass[r] != null) rowGlass[r].lift(sel, 0);
+            else rowBgs[r].setColor(sel ? SELECTED_BG : Color.TRANSPARENT);
         }
     }
 

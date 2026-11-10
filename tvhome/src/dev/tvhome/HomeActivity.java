@@ -87,6 +87,7 @@ public final class HomeActivity extends Activity {
 
     private SharedPreferences prefs;
     private Ambient ambient;
+    private Glass glass;
     private TileMenu menu;
     private TileCache cache;
     private Load lastLoad; // the shown load, hidden apps included; hide/unhide re-show it
@@ -146,6 +147,7 @@ public final class HomeActivity extends Activity {
         root.addView(washBack, fill());
         root.addView(washFront, fill());
         washBack.setImageDrawable(new ColorDrawable(Color.BLACK));
+        glass = new Glass(washFront, washBack, density);
 
         title = text(42, true);
         title.setMaxLines(1);
@@ -164,10 +166,20 @@ public final class HomeActivity extends Activity {
         rowGlow = new ImageView(this);
         rowGlow.setImageBitmap(drawRowPanel(true));
         rowGlow.setColorFilter(glowColor, PorterDuff.Mode.SRC_IN);
-        ImageView body = new ImageView(this);
-        body.setImageBitmap(drawRowPanel(false));
         rowPanel.addView(rowGlow, fill());
-        rowPanel.addView(body, fill());
+        if (glass.enabled()) {
+            // The glass sits inside the glow margin; it is the panel's own body, not a bitmap.
+            View body = new View(this);
+            body.setBackground(glass.surface(body, new Glass.Style().radius(ROW_RADIUS)
+                    .bevel(16).refract(14).frost(0.13f).shine(0.65f)));
+            FrameLayout.LayoutParams bl = fill();
+            bl.setMargins(dp(ROW_GLOW), dp(ROW_GLOW), dp(ROW_GLOW), dp(ROW_GLOW));
+            rowPanel.addView(body, bl);
+        } else {
+            ImageView body = new ImageView(this);
+            body.setImageBitmap(drawRowPanel(false));
+            rowPanel.addView(body, fill());
+        }
         rowPanel.setFocusable(false);
         rowPanel.setAlpha(0f);
         // Behind the tiles: first child of the grid, so it scrolls with the rows.
@@ -218,9 +230,16 @@ public final class HomeActivity extends Activity {
         hint.setVisibility(View.GONE);
         FrameLayout.LayoutParams hp = wrap(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         hp.bottomMargin = dp(28);
+        if (glass.enabled()) {
+            // A glass capsule around it; the margin shrinks by the padding so the text stays put.
+            hint.setPadding(dp(20), dp(8), dp(20), dp(8));
+            hint.setBackground(glass.surface(hint, new Glass.Style().radius(19).bevel(8).refract(7)
+                    .frost(0.14f).shine(0.7f)));
+            hp.bottomMargin = dp(20);
+        }
         root.addView(hint, hp);
 
-        menu = new TileMenu(this, root);
+        menu = new TileMenu(this, root, glass);
 
         // Last, so the hand-off overlay covers everything above.
         ambient = new Ambient(this, root, prefs, main);
@@ -351,11 +370,18 @@ public final class HomeActivity extends Activity {
         LinearLayout v = new LinearLayout(this);
         v.setGravity(Gravity.CENTER_VERTICAL);
         v.setPadding(dp(14), dp(7), dp(16), dp(7));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setCornerRadius(dp(18));
-        bg.setColor(0x26FFFFFF);
+        GradientDrawable bg = null;
+        Glass.Surface pane = null;
+        if (glass.enabled()) {
+            // Focused: lit, bright glass (the wash's color still shows through) under dark text.
+            pane = glass.surface(v, new Glass.Style().radius(18).bevel(8).refract(7).frost(0.13f).shine(0.7f));
+        } else {
+            bg = new GradientDrawable();
+            bg.setCornerRadius(dp(18));
+            bg.setColor(0x26FFFFFF);
+        }
         PillGlow glow = new PillGlow(dp(10), dp(18));
-        v.setBackground(new LayerDrawable(new Drawable[] {glow, bg}));
+        v.setBackground(new LayerDrawable(new Drawable[] {glow, pane != null ? pane : bg}));
         v.setFocusable(true);
 
         Glyph g = new Glyph(glyph);
@@ -386,8 +412,11 @@ public final class HomeActivity extends Activity {
             }
             try { startActivity(intent); } catch (RuntimeException ignored) { }
         });
+        GradientDrawable flatBg = bg;
+        Glass.Surface glassBg = pane;
         v.setOnFocusChangeListener((x, has) -> {
-            bg.setColor(has ? 0xF2FFFFFF : 0x26FFFFFF);
+            if (glassBg != null) glassBg.lift(has, 150);
+            else flatBg.setColor(has ? 0xF2FFFFFF : 0x26FFFFFF);
             int fg = has ? 0xFF15161A : Color.WHITE;
             t.setTextColor(fg);
             g.setColor(fg);
