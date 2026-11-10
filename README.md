@@ -2,7 +2,7 @@
 
 Launcher leve no estilo Apple TV e scripts de manutenção para uma **Chromecast com Google TV 4K** (Android 14, 2 GB de RAM).
 
-![Tela inicial](docs/inicio.png)
+![Tela inicial](docs/tela-inicial.png)
 
 ## O que tem aqui
 
